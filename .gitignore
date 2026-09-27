@@ -48,3 +48,8 @@ ehthumbs.db
 .env
 .env.*
 *.local.json
+
+## Agent Runtime State
+.agents/current/*
+!.agents/current/.gitkeep
+
