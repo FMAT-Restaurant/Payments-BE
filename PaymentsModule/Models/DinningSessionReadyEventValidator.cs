@@ -8,20 +8,20 @@ public class DinningSessionReadyEventValidator : AbstractValidator<DinningSessio
     {
         RuleFor(x => x.EventId).NotEmpty();
         RuleFor(x => x.DinningSessionId).NotEmpty();
-        RuleFor(x => x.MesaId).NotEmpty();
-        RuleFor(x => x.MeseroId).NotEmpty();
+        RuleFor(x => x.TableId).NotEmpty();
+        RuleFor(x => x.WaiterId).NotEmpty();
         RuleFor(x => x.Timestamp).NotEmpty();
 
         RuleFor(x => x.Items).NotEmpty();
         RuleForEach(x => x.Items).ChildRules(item =>
         {
-            item.RuleFor(i => i.PlatilloId).NotEmpty();
-            item.RuleFor(i => i.Nombre).NotEmpty();
-            item.RuleFor(i => i.Cantidad).GreaterThan(0);
-            item.RuleFor(i => i.PrecioUnitario).GreaterThanOrEqualTo(0);
+            item.RuleFor(i => i.DishId).NotEmpty();
+            item.RuleFor(i => i.Name).NotEmpty();
+            item.RuleFor(i => i.Quantity).GreaterThan(0);
+            item.RuleFor(i => i.UnitPrice).GreaterThanOrEqualTo(0);
         });
 
-        RuleFor(x => x.Totales).NotNull();
-        RuleFor(x => x.Totales.TotalEsperado).GreaterThan(0).When(x => x.Totales is not null);
+        RuleFor(x => x.Totals).NotNull();
+        RuleFor(x => x.Totals.ExpectedTotal).GreaterThan(0).When(x => x.Totals is not null);
     }
 }

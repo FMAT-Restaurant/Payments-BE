@@ -20,7 +20,7 @@ builder.Services.AddHealthChecks();
 builder.Services.AddStackExchangeRedisCache(options =>
     options.Configuration = builder.Configuration.GetConnectionString("Redis"));
 builder.Services.AddScoped<IValidator<DinningSessionReadyEvent>, DinningSessionReadyEventValidator>();
-builder.Services.AddScoped<CuentaPendienteService>();
+builder.Services.AddScoped<PendingBillService>();
 
 builder.Services.AddMassTransit(x =>
 {

@@ -7,16 +7,16 @@ namespace PaymentsModule.Consumers;
 
 public class DinningSessionReadyConsumer(
     IValidator<DinningSessionReadyEvent> validator,
-    CuentaPendienteService cuentas,
+    PendingBillService bills,
     ILogger<DinningSessionReadyConsumer> logger) : IConsumer<DinningSessionReadyEvent>
 {
     public async Task Consume(ConsumeContext<DinningSessionReadyEvent> context)
     {
         await validator.ValidateAndThrowAsync(context.Message, context.CancellationToken);
 
-        if (!await cuentas.GuardarSnapshotAsync(context.Message, context.CancellationToken))
+        if (!await bills.SaveSnapshotAsync(context.Message, context.CancellationToken))
         {
-            logger.LogInformation("Evento {EventId} ya procesado o desactualizado, se omite", context.Message.EventId);
+            logger.LogInformation("Event {EventId} already processed or outdated, skipping", context.Message.EventId);
         }
     }
 }
