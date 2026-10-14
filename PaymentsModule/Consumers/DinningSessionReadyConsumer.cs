@@ -16,7 +16,7 @@ public class DinningSessionReadyConsumer(
 
         if (!await cuentas.GuardarSnapshotAsync(context.Message, context.CancellationToken))
         {
-            logger.LogInformation("Evento {EventId} ya procesado, se omite", context.Message.EventId);
+            logger.LogInformation("Evento {EventId} ya procesado o desactualizado, se omite", context.Message.EventId);
         }
     }
 }

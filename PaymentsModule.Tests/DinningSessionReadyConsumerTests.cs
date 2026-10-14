@@ -61,6 +61,19 @@ public class DinningSessionReadyConsumerTests : IAsyncLifetime
         Assert.Equal(250m, (await ObtenerAsync(sesion))?.Totales.TotalEsperado);
     }
 
+    [Fact]
+    public async Task Descarta_evento_mas_viejo_que_el_snapshot()
+    {
+        var sesion = Guid.NewGuid();
+        var nuevo = Evento(sesion, total: 250m);
+        await PublicarAsync(nuevo);
+
+        var fault = await PublicarAsync(Evento(sesion, total: 200m) with { Timestamp = nuevo.Timestamp.AddMinutes(-1) });
+
+        Assert.Null(fault);
+        Assert.Equal(250m, (await ObtenerAsync(sesion))?.Totales.TotalEsperado);
+    }
+
     [Theory]
     [InlineData(0)]
     [InlineData(-10)]

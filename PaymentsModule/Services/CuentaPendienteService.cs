@@ -11,13 +11,21 @@ public class CuentaPendienteService(IDistributedCache cache)
         AbsoluteExpirationRelativeToNow = TimeSpan.FromHours(24)
     };
 
-    /// <summary>Saves (or overwrites) the session snapshot. Returns false if the event was already processed.</summary>
+    /// <summary>Saves (or overwrites) the session snapshot. Returns false if the event was already processed or is older than the saved snapshot.</summary>
     public async Task<bool> GuardarSnapshotAsync(DinningSessionReadyEvent evento, CancellationToken ct = default)
     {
         // ponytail: check-then-set, two concurrent deliveries of the same eventId can both write (same data, harmless).
         var eventoKey = $"pagos:evento:{evento.EventId}";
         if (await cache.GetAsync(eventoKey, ct) is not null)
         {
+            return false;
+        }
+
+        // Out-of-order delivery: an older event must not overwrite a newer snapshot.
+        var actual = await ObtenerAsync(evento.DinningSessionId, ct);
+        if (actual is not null && evento.Timestamp < actual.Timestamp)
+        {
+            await cache.SetStringAsync(eventoKey, "1", Ttl, ct);
             return false;
         }
 
