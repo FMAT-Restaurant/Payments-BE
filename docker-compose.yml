@@ -1,0 +1,36 @@
+# Local infrastructure for Payments-BE only. The fixed project name keeps containers,
+# network and volumes isolated from other local stacks (e.g. Booking-service).
+name: payments
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: payments-postgres
+    environment:
+      POSTGRES_DB: payments
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d payments"]
+      interval: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: payments-redis
+    ports:
+      - "6379:6379"
+
+  rabbitmq:
+    image: rabbitmq:4-management-alpine
+    container_name: payments-rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+
+volumes:
+  postgres-data:
