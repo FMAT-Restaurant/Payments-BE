@@ -1,9 +1,11 @@
 using FluentValidation;
 using MassTransit;
+using Microsoft.EntityFrameworkCore;
 using OpenTelemetry;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Trace;
 using PaymentsModule.Consumers;
+using PaymentsModule.Data;
 using PaymentsModule.Models;
 using PaymentsModule.Services;
 
@@ -22,9 +24,18 @@ builder.Services.AddStackExchangeRedisCache(options =>
 builder.Services.AddScoped<IValidator<DinningSessionReadyEvent>, DinningSessionReadyEventValidator>();
 builder.Services.AddScoped<PendingBillService>();
 
+builder.Services.AddDbContext<PaymentsDbContext>(options =>
+    options.UseNpgsql(builder.Configuration.GetConnectionString("Postgres")));
+
 builder.Services.AddMassTransit(x =>
 {
     x.AddConsumer<DinningSessionReadyConsumer, DinningSessionReadyConsumerDefinition>();
+    // Bus outbox: events published from services are stored with the DbContext and only sent after COMMIT.
+    x.AddEntityFrameworkOutbox<PaymentsDbContext>(o =>
+    {
+        o.UsePostgres();
+        o.UseBusOutbox();
+    });
     x.UsingRabbitMq((context, cfg) =>
     {
         cfg.Host(new Uri(builder.Configuration.GetConnectionString("RabbitMq")!));
