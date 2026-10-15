@@ -1,6 +1,11 @@
+using FluentValidation;
+using MassTransit;
 using OpenTelemetry;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Trace;
+using PaymentsModule.Consumers;
+using PaymentsModule.Models;
+using PaymentsModule.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -11,6 +16,21 @@ builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
 builder.Services.AddHealthChecks();
+
+builder.Services.AddStackExchangeRedisCache(options =>
+    options.Configuration = builder.Configuration.GetConnectionString("Redis"));
+builder.Services.AddScoped<IValidator<DinningSessionReadyEvent>, DinningSessionReadyEventValidator>();
+builder.Services.AddScoped<PendingBillService>();
+
+builder.Services.AddMassTransit(x =>
+{
+    x.AddConsumer<DinningSessionReadyConsumer, DinningSessionReadyConsumerDefinition>();
+    x.UsingRabbitMq((context, cfg) =>
+    {
+        cfg.Host(new Uri(builder.Configuration.GetConnectionString("RabbitMq")!));
+        cfg.ConfigureEndpoints(context);
+    });
+});
 
 // Observability (from main's ServiceDefaults). Exports only when OTEL_EXPORTER_OTLP_ENDPOINT is set.
 builder.Logging.AddOpenTelemetry(logging =>
