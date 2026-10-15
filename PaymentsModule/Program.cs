@@ -18,11 +18,19 @@ builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
 builder.Services.AddHealthChecks();
+builder.Services.AddControllers();
+builder.Services.AddProblemDetails();
+
+// JWT forwarded by the API Gateway. Authority/audience come from Authentication:Schemes:Bearer in configuration.
+builder.Services.AddAuthentication().AddJwtBearer();
+builder.Services.AddAuthorization();
 
 builder.Services.AddStackExchangeRedisCache(options =>
     options.Configuration = builder.Configuration.GetConnectionString("Redis"));
 builder.Services.AddScoped<IValidator<DinningSessionReadyEvent>, DinningSessionReadyEventValidator>();
 builder.Services.AddScoped<PendingBillService>();
+builder.Services.AddScoped<IValidator<ChargeRequest>, ChargeRequestValidator>();
+builder.Services.AddScoped<ChargeService>();
 
 builder.Services.AddDbContext<PaymentsDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("Postgres")));
@@ -68,6 +76,9 @@ if (!string.IsNullOrWhiteSpace(builder.Configuration["OTEL_EXPORTER_OTLP_ENDPOIN
 
 var app = builder.Build();
 
+// Unhandled errors (e.g. database failures after rollback) become a 500 ProblemDetails without internals.
+app.UseExceptionHandler();
+
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
 {
@@ -77,6 +88,10 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
+app.UseAuthentication();
+app.UseAuthorization();
+
+app.MapControllers();
 
 app.MapHealthChecks("/health");
 
