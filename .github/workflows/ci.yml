@@ -24,6 +24,20 @@ jobs:
       contents: read
     env:
       SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      ConnectionStrings__Postgres: "Host=localhost;Port=5432;Database=payments_tests;Username=postgres;Password=postgres"
+
+    # ChargeServiceTests run against a real PostgreSQL (transactions, sequence, unique index, outbox).
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-retries 10
 
     steps:
       - name: "checkout code"
