@@ -1,7 +1,7 @@
 using System.Data;
 using MassTransit;
 using Microsoft.EntityFrameworkCore;
-using Npgsql;
+using Microsoft.Data.SqlClient;
 using PaymentsModule.Data;
 using PaymentsModule.Models;
 
@@ -81,9 +81,10 @@ public class ChargeService(PaymentsDbContext db, PendingBillService bills, IPubl
         };
 
         await using var dbTransaction = await db.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
-        transaction.Number = await db.Database
-            .SqlQueryRaw<long>($"""SELECT nextval('{PaymentsDbContext.FolioSequence}') AS "Value" """)
-            .SingleAsync(ct);
+        // Not composable: SQL Server rejects NEXT VALUE FOR inside the subquery EF would wrap around SingleAsync.
+        transaction.Number = (await db.Database
+            .SqlQueryRaw<long>($"SELECT NEXT VALUE FOR {PaymentsDbContext.FolioSequence} AS Value")
+            .ToListAsync(ct)).Single();
         // ponytail: global sequence and UTC date, so the number does not restart daily; switch to a per-day counter if the business asks for it.
         transaction.Folio = $"TX-{transaction.CreatedAt:yyyyMMdd}-{transaction.Number:D6}";
         db.Transactions.Add(transaction);
@@ -96,7 +97,8 @@ public class ChargeService(PaymentsDbContext db, PendingBillService bills, IPubl
         {
             await db.SaveChangesAsync(ct);
         }
-        catch (DbUpdateException ex) when (ex.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation })
+        // 2601/2627: duplicate key on a unique index / constraint.
+        catch (DbUpdateException ex) when (ex.InnerException is SqlException { Number: 2601 or 2627 })
         {
             // A concurrent retry for the same session committed first.
             return AlreadyPaid();

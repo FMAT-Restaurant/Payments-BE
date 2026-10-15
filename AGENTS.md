@@ -105,8 +105,8 @@ Agreed in PR #2 review. Do not change without team agreement:
 
 Agreed while implementing PMC-6. Several items are pending confirmation with the story owners (see the PMC-6 PR):
 
-- **Database:** PostgreSQL via EF Core (`ConnectionStrings:Postgres`). Money is `decimal(18,2)`; enums are stored as text. Migrations live in `PaymentsModule/Data/Migrations`.
-- **Local infrastructure:** `docker compose up -d` (project name `payments`). Postgres is published on port **5434** to avoid a native PostgreSQL (5432) and other local stacks (e.g. Booking-service on 5433).
+- **Database:** SQL Server via EF Core (`ConnectionStrings:SqlServer`), as referenced by PMC-13/PMC-16. Money is `decimal(18,2)`; enums are stored as text; keys are EF sequential GUIDs. Migrations live in `PaymentsModule/Data/Migrations`.
+- **Local infrastructure:** `docker compose up -d` (project name `payments`). SQL Server is published on port **14330** to avoid a native SQL Server install and other local stacks (e.g. Booking-service).
 - **Source of truth for the amount due:** the pending bill saved by PMC-5 in Redis. `detalles_snapshot` in the request is validated but not trusted; the persisted items come from the bill. Amount due = `ExpectedTotal + propina`; `Total` = sum of `PaymentBreakdown`.
 - **Change:** payments are capped to the amount owed (electronic first, cash absorbs the excess), so change is never stored as income. Electronic payments exceeding the total are rejected (422).
 - **Idempotency:** unique index on `DinningSessionId` plus a prior check; both paths return 409.
@@ -114,7 +114,7 @@ Agreed while implementing PMC-6. Several items are pending confirmation with the
 - **Folio:** `TX-{yyyyMMdd}-{number:D6}` from the global sequence `transaction_number_seq` (UTC date, does not restart daily).
 - **Identity:** JWT Bearer configured in `Authentication:Schemes:Bearer`; the cashier is the `NameIdentifier` (`sub`) claim, never the payload.
 - **Cash shift:** `CashShift` has the shape required by PMC-8 (open/close endpoints belong to PMC-8). Charging requires an `Open` shift of the cashier (422 otherwise).
-- **Tests:** `ChargeServiceTests` run against a real PostgreSQL (`payments_tests` database; override with `ConnectionStrings__Postgres`). CI uses a Postgres service container.
+- **Tests:** `ChargeServiceTests` run against a real SQL Server (`payments_tests` database; override with `ConnectionStrings__SqlServer`). CI uses a SQL Server service container.
 
 ---
 

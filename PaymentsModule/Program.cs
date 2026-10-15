@@ -33,7 +33,7 @@ builder.Services.AddScoped<IValidator<ChargeRequest>, ChargeRequestValidator>();
 builder.Services.AddScoped<ChargeService>();
 
 builder.Services.AddDbContext<PaymentsDbContext>(options =>
-    options.UseNpgsql(builder.Configuration.GetConnectionString("Postgres")));
+    options.UseSqlServer(builder.Configuration.GetConnectionString("SqlServer")));
 
 builder.Services.AddMassTransit(x =>
 {
@@ -41,7 +41,7 @@ builder.Services.AddMassTransit(x =>
     // Bus outbox: events published from services are stored with the DbContext and only sent after COMMIT.
     x.AddEntityFrameworkOutbox<PaymentsDbContext>(o =>
     {
-        o.UsePostgres();
+        o.UseSqlServer();
         o.UseBusOutbox();
     });
     x.UsingRabbitMq((context, cfg) =>

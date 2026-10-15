@@ -5,7 +5,7 @@ namespace PaymentsModule.Models;
 // Immutable sale history. Items are a plain-text snapshot: no references to the product catalog.
 public class PaymentTransaction
 {
-    public Guid Id { get; set; } = Guid.CreateVersion7();
+    public Guid Id { get; set; }
     public long Number { get; set; }
     public required string Folio { get; set; }
     public Guid DinningSessionId { get; set; }
@@ -26,7 +26,7 @@ public class PaymentTransaction
 
 public class TransactionItem
 {
-    public Guid Id { get; set; } = Guid.CreateVersion7();
+    public Guid Id { get; set; }
     public Guid TransactionId { get; set; }
     public required string DishName { get; set; }
     public int Quantity { get; set; }
@@ -36,7 +36,7 @@ public class TransactionItem
 
 public class PaymentBreakdown
 {
-    public Guid Id { get; set; } = Guid.CreateVersion7();
+    public Guid Id { get; set; }
     public Guid TransactionId { get; set; }
     public PaymentMethod Method { get; set; }
 

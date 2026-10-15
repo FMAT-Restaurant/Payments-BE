@@ -16,12 +16,12 @@ using PaymentsModule.Services;
 
 namespace PaymentsModule.Tests;
 
-// Runs against a real PostgreSQL: `docker compose up -d postgres` locally, a service container in CI.
+// Runs against a real SQL Server: `docker compose up -d sqlserver` locally, a service container in CI.
 public class ChargeServiceTests : IAsyncLifetime
 {
     private static readonly string ConnectionString =
-        Environment.GetEnvironmentVariable("ConnectionStrings__Postgres")
-        ?? "Host=localhost;Port=5434;Database=payments_tests;Username=postgres;Password=postgres";
+        Environment.GetEnvironmentVariable("ConnectionStrings__SqlServer")
+        ?? "Server=localhost,14330;Database=payments_tests;User Id=sa;Password=Payments_Dev_2026!;TrustServerCertificate=True";
 
     private static readonly SemaphoreSlim MigrateOnce = new(1, 1);
     private static bool _migrated;
@@ -34,7 +34,7 @@ public class ChargeServiceTests : IAsyncLifetime
         _provider = new ServiceCollection()
             .AddLogging()
             .AddDistributedMemoryCache()
-            .AddDbContext<PaymentsDbContext>(o => o.UseNpgsql(ConnectionString).AddInterceptors(_failure))
+            .AddDbContext<PaymentsDbContext>(o => o.UseSqlServer(ConnectionString).AddInterceptors(_failure))
             .AddScoped<PendingBillService>()
             .AddScoped<ChargeService>()
             .AddScoped<IValidator<ChargeRequest>, ChargeRequestValidator>()
@@ -44,7 +44,7 @@ public class ChargeServiceTests : IAsyncLifetime
                 x.AddConsumer<PaymentCompletedListener>();
                 x.AddEntityFrameworkOutbox<PaymentsDbContext>(o =>
                 {
-                    o.UsePostgres();
+                    o.UseSqlServer();
                     o.UseBusOutbox();
                     o.QueryDelay = TimeSpan.FromMilliseconds(100);
                 });
