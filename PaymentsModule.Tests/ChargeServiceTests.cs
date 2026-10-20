@@ -56,13 +56,21 @@ public class ChargeServiceTests : IAsyncLifetime
 
     public async Task InitializeAsync()
     {
+        await using (var scope = _provider.CreateAsyncScope())
+        {
+            await EnsureMigratedAsync(scope.ServiceProvider.GetRequiredService<PaymentsDbContext>());
+        }
+
+        await Harness.Start();
+    }
+
+    internal static async Task EnsureMigratedAsync(PaymentsDbContext db)
+    {
         await MigrateOnce.WaitAsync();
         try
         {
             if (!_migrated)
             {
-                await using var scope = _provider.CreateAsyncScope();
-                var db = scope.ServiceProvider.GetRequiredService<PaymentsDbContext>();
                 await db.Database.EnsureDeletedAsync();
                 await db.Database.MigrateAsync();
                 _migrated = true;
@@ -72,8 +80,6 @@ public class ChargeServiceTests : IAsyncLifetime
         {
             MigrateOnce.Release();
         }
-
-        await Harness.Start();
     }
 
     public async Task DisposeAsync() => await _provider.DisposeAsync();
