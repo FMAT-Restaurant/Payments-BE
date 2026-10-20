@@ -38,7 +38,7 @@ Verify that architectural separation is maintained:
 
 ### Controller Integrity
 Check that Controllers/Endpoints:
-- act only as an HTTP interface for the Frontend;
+- act only as an HTTP interface for incoming requests routed via the API Gateway;
 - do not contain complex business calculations or direct data persistence logic;
 - properly handle HTTP request validation and return appropriate HTTP status codes.
 
