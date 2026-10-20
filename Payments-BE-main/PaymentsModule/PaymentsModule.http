@@ -1,0 +1,47 @@
+@PaymentsModule_HostAddress = http://localhost:5150
+@Token = <JWT con claim "sub" = id del cajero>
+
+### Cobro mixto (efectivo + tarjeta)
+POST {{PaymentsModule_HostAddress}}/api/cobros
+Authorization: Bearer {{Token}}
+Content-Type: application/json
+
+{
+  "dinning_session_id": "a1b2c3d4-e5f6-7890-1234-56789abcdef0",
+  "detalles_snapshot": [
+    {
+      "nombre_platillo": "Corte Ribeye",
+      "cantidad": 1,
+      "precio_unitario": 500.00,
+      "importe": 500.00
+    }
+  ],
+  "pagos": [
+    { "metodo_pago": "EFECTIVO", "monto": 200.00, "referencia_autorizacion": null },
+    { "metodo_pago": "TARJETA_CREDITO", "monto": 300.00, "referencia_autorizacion": "AUTH-987654" }
+  ]
+}
+
+### Detalle (ticket) por folio
+GET {{PaymentsModule_HostAddress}}/api/v1/pagos/TX-20260929-001
+Authorization: Bearer {{Token}}
+
+### Historial de ventas (paginado)
+GET {{PaymentsModule_HostAddress}}/api/v1/pagos?fecha_inicio=2026-09-01T00:00:00Z&fecha_fin=2026-09-30T23:59:59Z&estado=COMPLETADO&page_index=1&page_size=10
+Authorization: Bearer {{Token}}
+
+### Abrir caja
+POST {{PaymentsModule_HostAddress}}/api/v1/caja/abrir
+Authorization: Bearer {{Token}}
+Content-Type: application/json
+
+{ "fondo_inicial": 500.00 }
+
+### Cerrar caja
+POST {{PaymentsModule_HostAddress}}/api/v1/caja/cerrar
+Authorization: Bearer {{Token}}
+Content-Type: application/json
+
+{ "efectivo_declarado": 2500.00 }
+
+###
