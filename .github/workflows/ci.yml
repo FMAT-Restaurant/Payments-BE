@@ -1,0 +1,68 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: ["main"]
+
+  pull_request:
+    branches: ["main"]
+
+  workflow_dispatch:
+
+  schedule:
+    - cron: "0 0 * * 0"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build-and-verify:
+    name: "Build, Lint & Test"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+    steps:
+      - name: "checkout code"
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: "setup dotnet"
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: "install dependencies"
+        run: dotnet restore
+
+      - name: "verify formatting (lint)"
+        run: dotnet format --verify-no-changes
+
+      - name: "build"
+        run: dotnet build --no-restore --configuration Release
+
+      - name: "run tests"
+        run: dotnet test --no-build --configuration Release --verbosity normal
+
+      - name: SonarQube Scan
+        if: env.SONAR_TOKEN != ''
+        uses: SonarSource/sonarqube-scan-action@v8.2.2
+        with:
+          args: >
+            -Dsonar.projectKey=FMAT-Restaurant_Payments-BE
+            -Dsonar.sources=PaymentsModule
+            -Dsonar.qualitygate.wait=true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Discord notification on failure
+        if: failure()
+        uses: Ilshidur/action-discord@0.4.0
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        with: 
+          args: 'Pipeline de CI falló en ${{ github.ref_name }} por ${{ github.actor }}'
