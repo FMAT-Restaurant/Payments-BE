@@ -51,6 +51,8 @@ builder.Services.AddMassTransit(x =>
     });
 });
 
+builder.Services.AddScoped<PrintTicketService>();
+
 // Observability (from main's ServiceDefaults). Exports only when OTEL_EXPORTER_OTLP_ENDPOINT is set.
 builder.Logging.AddOpenTelemetry(logging =>
 {
