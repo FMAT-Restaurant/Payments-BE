@@ -118,6 +118,21 @@ Agreed while implementing PMC-6. Several items are pending confirmation with the
 
 ---
 
+## Sales Export Decisions (PMC-15)
+
+Taken while implementing PMC-15; pending confirmation with the story owner where noted:
+
+- **Route and access:** `GET /api/v1/pagos/exportar?inicio=...&fin=...` (ISO 8601), restricted to `[Authorize(Roles = "Contador,Administrador")]`.
+- **Window:** filters by the sale date (`PaymentTransaction.CreatedAt`), both ends inclusive (only sale date stored; pending confirmation). `inicio` and `fin` are required, `fin >= inicio`, and the range cannot exceed 31 days (`SalesExportQueryValidator`); violations return `400` (`ValidationProblemDetails` keyed `inicio` / `fin`) before any database access.
+- **Rows:** every sale in the window, cancelled ones included (`Estado` = `COMPLETADO` / `CANCELADO`), per scenario 4 of the story.
+- **Columns:** `Folio,Fecha,Estado,Subtotal,Impuestos,Propina,Total,Efectivo,Tarjetas`. `Fecha` is UTC ISO 8601 (`yyyy-MM-ddTHH:mm:ssZ`); amounts are `decimal` with invariant `0.00` format; `Efectivo` sums `Cash` breakdowns and `Tarjetas` sums `CreditCard` + `DebitCard`, both in SQL. The folio is exported as stored by `ChargeService`.
+- **Streaming:** `AsNoTracking().AsAsyncEnumerable()` written with CsvHelper (RFC 4180, UTF-8 without BOM) straight into `Response.Body`; no `ToList`. The writer flushes every 500 rows, always at record boundaries, and Kestrel sends the body chunked.
+- **Failure mid-stream:** the controller logs the error and calls `HttpContext.Abort()` so the client gets an incomplete download, never a file that looks finished. A failure before the response starts goes to the global exception handler (`500`).
+- **Isolation:** the default SQL Server `READ COMMITTED` level, so uncommitted sales are never read. No calls to other microservices during the export.
+- **Tests:** `SalesExportTests` run against the same SQL Server test database, each test in its own date window.
+
+---
+
 ## General Rules
 
 - **Code Formatting:** All code contributions must adhere to repository standards and pass `dotnet format --verify-no-changes`.
