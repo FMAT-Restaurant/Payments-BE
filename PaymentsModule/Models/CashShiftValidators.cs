@@ -6,7 +6,7 @@ public class OpenCashShiftRequestValidator : AbstractValidator<OpenCashShiftRequ
 {
     public OpenCashShiftRequestValidator()
     {
-        RuleFor(x => x.InitialFund).GreaterThanOrEqualTo(0m).PrecisionScale(18, 2, true);
+        RuleFor(x => x.InitialFund).NotNull().GreaterThanOrEqualTo(0m).PrecisionScale(18, 2, true);
     }
 }
 
@@ -14,7 +14,7 @@ public class CloseCashShiftRequestValidator : AbstractValidator<CloseCashShiftRe
 {
     public CloseCashShiftRequestValidator()
     {
-        RuleFor(x => x.DeclaredCash).GreaterThanOrEqualTo(0m).PrecisionScale(18, 2, true);
+        RuleFor(x => x.DeclaredCash).NotNull().GreaterThanOrEqualTo(0m).PrecisionScale(18, 2, true);
     }
 }
 

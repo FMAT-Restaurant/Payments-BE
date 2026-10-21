@@ -29,7 +29,7 @@ public enum CashShiftStatus
 }
 
 public record OpenCashShiftRequest(
-    [property: JsonPropertyName("fondo_inicial")] decimal InitialFund);
+    [property: JsonPropertyName("fondo_inicial")] decimal? InitialFund);
 
 public record OpenCashShiftResponse(
     [property: JsonPropertyName("turno_caja_id")] Guid CashShiftId,
@@ -37,7 +37,7 @@ public record OpenCashShiftResponse(
     [property: JsonPropertyName("mensaje")] string Message);
 
 public record CloseCashShiftRequest(
-    [property: JsonPropertyName("efectivo_declarado")] decimal DeclaredCash);
+    [property: JsonPropertyName("efectivo_declarado")] decimal? DeclaredCash);
 
 public record CloseCashShiftResponse(
     [property: JsonPropertyName("turno_caja_id")] Guid CashShiftId,

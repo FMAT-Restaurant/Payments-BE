@@ -35,7 +35,7 @@ public class CashShiftService(PaymentsDbContext db)
         var shift = new CashShift
         {
             CashierId = cashierId,
-            InitialFund = request.InitialFund,
+            InitialFund = request.InitialFund!.Value,
             Status = CashShiftStatus.Open,
             OpenedAt = DateTimeOffset.UtcNow
         };
@@ -61,8 +61,10 @@ public class CashShiftService(PaymentsDbContext db)
     {
         await using var dbTransaction = await db.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
 
+        // UPDLOCK + HOLDLOCK serializes against ChargeService.ChargeAsync so no sale can commit into this shift while closing.
         var shift = await db.CashShifts
-            .SingleOrDefaultAsync(s => s.CashierId == cashierId && s.Status == CashShiftStatus.Open, ct);
+            .FromSqlInterpolated($"SELECT * FROM CashShifts WITH (UPDLOCK, ROWLOCK, HOLDLOCK) WHERE CashierId = {cashierId} AND Status = {nameof(CashShiftStatus.Open)}")
+            .SingleOrDefaultAsync(ct);
         if (shift is null)
         {
             return NoOpenShift();
@@ -73,20 +75,28 @@ public class CashShiftService(PaymentsDbContext db)
             .Where(t => t.CashShiftId == shift.Id && t.Status == TransactionStatus.Completed)
             .ToListAsync(ct);
 
-        var cashSales = transactions
-            .SelectMany(t => t.Payments)
-            .Where(p => p.Method == PaymentMethod.Cash)
-            .Sum(p => p.Amount);
-        var cardTotal = transactions
-            .SelectMany(t => t.Payments)
-            .Where(p => p.Method != PaymentMethod.Cash)
-            .Sum(p => p.Amount);
-        var tipsTotal = transactions.Sum(t => t.Tip);
+        var cashSales = 0m;
+        var cardTotal = 0m;
+        var tipsTotal = 0m;
 
+        foreach (var tx in transactions)
+        {
+            var billAmount = tx.Total - tx.Tip;
+            var txCardPaid = tx.Payments.Where(p => p.Method != PaymentMethod.Cash).Sum(p => p.Amount);
+            // Tips are tracked separately in TipsTotal so they are not double-counted in ExpectedCash or CardTotal.
+            var netCardSale = Math.Min(txCardPaid, billAmount);
+            var netCashSale = billAmount - netCardSale;
+
+            cardTotal += netCardSale;
+            cashSales += netCashSale;
+            tipsTotal += tx.Tip;
+        }
+
+        var declaredCash = request.DeclaredCash!.Value;
         var expectedCash = shift.InitialFund + cashSales;
-        var difference = request.DeclaredCash - expectedCash;
+        var difference = declaredCash - expectedCash;
 
-        shift.DeclaredCash = request.DeclaredCash;
+        shift.DeclaredCash = declaredCash;
         shift.ExpectedCash = expectedCash;
         shift.CardTotal = cardTotal;
         shift.TipsTotal = tipsTotal;

@@ -124,6 +124,21 @@ Agreed while implementing PMC-6. Several items are pending confirmation with the
 
 ---
 
+## Cash Shift Decisions (PMC-8)
+
+Agreed while implementing and reviewing PMC-8:
+
+- **Routes:** `POST /api/v1/cash-shifts/open` and `POST /api/v1/cash-shifts/close` follow the English `Code Language` convention (to be aligned with Frontend / API Gateway). Wire JSON property names keep the Spanish snake_case contract (`fondo_inicial`, `efectivo_declarado`, `turno_caja_id`, `estado`, `diferencia`, `mensaje`).
+- **Required decimal fields:** `InitialFund` and `DeclaredCash` are `decimal?` on the request DTOs and validated with `.NotNull().GreaterThanOrEqualTo(0m).PrecisionScale(18, 2, true)` so an empty payload `{}` is rejected with `400 Bad Request` instead of defaulting to `0.00`.
+- **Open shift concurrency:** a filtered unique index `IX_CashShifts_CashierId` (`WHERE [Status] = 'Open'`) plus a prior check guarantees at most one open shift per cashier; concurrent duplicates return `409 Conflict`.
+- **Close vs. charge concurrency:** both `ChargeService.ChargeAsync` and `CashShiftService.CloseAsync` acquire a row lock on the open `CashShift` (`WITH (UPDLOCK, ROWLOCK, HOLDLOCK)`) inside their `ReadCommitted` transaction before reading or inserting `Transactions`, preventing a concurrent sale from committing into a shift that is closing. `RowVersion` remains as the optimistic concurrency token on `CashShift`.
+- **Tips in shift reconciliation:** tips are accumulated in `TipsTotal` and excluded from `ExpectedCash` and `CardTotal` so they are never double-counted and cash tips taken by the waiter do not unbalance the drawer (`netCardSale = min(cardPaid, total - tip)`, `netCashSale = (total - tip) - netCardSale`, `ExpectedCash = InitialFund + sum(netCashSale)`). Pending final confirmation with the story owner.
+- **Reconciliation difference & messages:** `Difference = DeclaredCash - ExpectedCash` (negative on shortage, positive on surplus, `0.00` on exact match). Exact match transitions status to `Closed` (`CERRADO`, `"Corte exacto. Turno cerrado."`); non-zero transitions to `Unbalanced` (`DESCUADRADO`, `"Corte con faltante. Turno cerrado con descuadre."` or `"Corte con sobrante. Turno cerrado con descuadre."`).
+- **Closing without open shift:** returns `422 Unprocessable Entity` (`ProblemDetails`), matching `ChargeService` when no open shift exists.
+- **Persisted summary:** `CashShift` stores `DeclaredCash`, `ExpectedCash`, `CardTotal`, `TipsTotal`, and `Difference` in the database while the close response returns the 4 contract fields.
+
+---
+
 ## General Rules
 
 - **Code Formatting:** All code contributions must adhere to repository standards and pass `dotnet format --verify-no-changes`.

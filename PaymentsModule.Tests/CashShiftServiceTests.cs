@@ -109,9 +109,10 @@ public class CashShiftServiceTests : IAsyncLifetime
         var cashier = NewCashier();
         var opened = await OpenAsync(new OpenCashShiftRequest(500.00m), cashier);
 
-        // Cash sale: 1950 + 50 tip = 2000 cash; Card sale: 400 + 40 tip = 440 card.
-        // Expected cash in drawer = 500 (initial fund) + 2000 (cash payments) = 2500.00.
-        await RecordSaleAsync(cashier, billTotal: 1950.00m, tip: 50.00m, new PaymentRequest(PaymentMethod.Cash, 2000.00m, null));
+        // Cash sale: 2000 bill + 50 tip = 2050 paid in cash (net cash sale = 2000; 50 tip goes to waiter).
+        // Card sale: 400 bill + 40 tip = 440 paid by card (net card sale = 400; 40 tip).
+        // Expected cash in drawer = 500 (initial fund) + 2000 (net cash sales) = 2500.00.
+        await RecordSaleAsync(cashier, billTotal: 2000.00m, tip: 50.00m, new PaymentRequest(PaymentMethod.Cash, 2050.00m, null));
         await RecordSaleAsync(cashier, billTotal: 400.00m, tip: 40.00m, new PaymentRequest(PaymentMethod.CreditCard, 440.00m, "AUTH-99"));
 
         var closed = await CloseAsync(new CloseCashShiftRequest(2500.00m), cashier);
@@ -128,7 +129,7 @@ public class CashShiftServiceTests : IAsyncLifetime
         Assert.Equal(CashShiftStatus.Closed, saved.Status);
         Assert.Equal(2500.00m, saved.DeclaredCash);
         Assert.Equal(2500.00m, saved.ExpectedCash);
-        Assert.Equal(440.00m, saved.CardTotal);
+        Assert.Equal(400.00m, saved.CardTotal);
         Assert.Equal(90.00m, saved.TipsTotal);
         Assert.Equal(0.00m, saved.Difference);
         Assert.NotNull(saved.ClosedAt);
@@ -185,6 +186,56 @@ public class CashShiftServiceTests : IAsyncLifetime
         Assert.Equal(CloseShiftOutcome.NoOpenShift, secondClose.Outcome);
         Assert.Equal(ChargeOutcome.NoOpenShift, chargeAttempt.Outcome);
         Assert.Equal(OpenShiftOutcome.Opened, reopened.Outcome);
+    }
+
+    [Fact]
+    public async Task Concurrent_close_and_charge_never_leave_sale_in_closed_shift_outside_cut()
+    {
+        var cashier = NewCashier();
+        var opened = await OpenAsync(new OpenCashShiftRequest(500.00m), cashier);
+
+        var chargeTask = TryChargeOnShiftAsync(cashier, billTotal: 100.00m);
+        var closeTask = CloseAsync(new CloseCashShiftRequest(500.00m), cashier);
+        await Task.WhenAll(chargeTask, closeTask);
+
+        var chargeResult = await chargeTask;
+        var closeResult = await closeTask;
+        var savedShift = await FindShiftAsync(opened.Response!.CashShiftId);
+
+        Assert.Equal(CloseShiftOutcome.Closed, closeResult.Outcome);
+        Assert.NotNull(savedShift);
+
+        if (chargeResult.Outcome == ChargeOutcome.Completed)
+        {
+            // Sale committed before close: ExpectedCash must include the $100 sale (500 + 100 = 600).
+            Assert.Equal(600.00m, savedShift.ExpectedCash);
+            Assert.Equal(-100.00m, savedShift.Difference);
+            Assert.Equal(CashShiftStatus.Unbalanced, savedShift.Status);
+        }
+        else
+        {
+            // Close committed first: the charge must be rejected with NoOpenShift.
+            Assert.Equal(ChargeOutcome.NoOpenShift, chargeResult.Outcome);
+            Assert.Equal(500.00m, savedShift.ExpectedCash);
+            Assert.Equal(0.00m, savedShift.Difference);
+            Assert.Equal(CashShiftStatus.Closed, savedShift.Status);
+        }
+    }
+
+    [Fact]
+    public async Task Empty_json_payload_is_rejected_for_open_and_close()
+    {
+        var cashier = NewCashier();
+        var emptyOpen = JsonSerializer.Deserialize<OpenCashShiftRequest>("{}")!;
+        var emptyClose = JsonSerializer.Deserialize<CloseCashShiftRequest>("{}")!;
+
+        var openResult = await ControllerOpenAsync(emptyOpen, cashier);
+        await OpenAsync(new OpenCashShiftRequest(500.00m), cashier);
+        var closeResult = await ControllerCloseAsync(emptyClose, cashier);
+
+        Assert.Equal(StatusCodes.Status400BadRequest, openResult.StatusCode);
+        Assert.Equal(StatusCodes.Status400BadRequest, closeResult.StatusCode);
+        Assert.Equal(1, await OpenShiftCountAsync(cashier));
     }
 
     [Fact]

@@ -1,8 +1,8 @@
 @PaymentsModule_HostAddress = http://localhost:5150
 @BearerToken = REEMPLAZAR_CON_TOKEN_JWT
 
-### 1. Abrir turno de caja (201 Created / 409 Conflict si ya hay uno abierto)
-POST {{PaymentsModule_HostAddress}}/api/v1/caja/abrir
+### 1. Open cash shift (201 Created / 409 Conflict if already open)
+POST {{PaymentsModule_HostAddress}}/api/v1/cash-shifts/open
 Authorization: Bearer {{BearerToken}}
 Content-Type: application/json
 
@@ -10,8 +10,8 @@ Content-Type: application/json
   "fondo_inicial": 500.00
 }
 
-### 2. Cerrar turno de caja (200 OK / 422 Unprocessable Entity si no hay turno abierto)
-POST {{PaymentsModule_HostAddress}}/api/v1/caja/cerrar
+### 2. Close cash shift (200 OK / 422 Unprocessable Entity if no open shift)
+POST {{PaymentsModule_HostAddress}}/api/v1/cash-shifts/close
 Authorization: Bearer {{BearerToken}}
 Content-Type: application/json
 

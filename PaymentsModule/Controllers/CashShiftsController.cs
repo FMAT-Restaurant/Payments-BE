@@ -9,13 +9,13 @@ namespace PaymentsModule.Controllers;
 
 [ApiController]
 [Authorize]
-[Route("api/v1/caja")]
+[Route("api/v1/cash-shifts")]
 public class CashShiftsController(
     CashShiftService shifts,
     IValidator<OpenCashShiftRequest> openValidator,
     IValidator<CloseCashShiftRequest> closeValidator) : ControllerBase
 {
-    [HttpPost("abrir")]
+    [HttpPost("open")]
     [ProducesResponseType<OpenCashShiftResponse>(StatusCodes.Status201Created)]
     [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
@@ -50,7 +50,7 @@ public class CashShiftsController(
         return new ObjectResult(problem) { StatusCode = problem.Status };
     }
 
-    [HttpPost("cerrar")]
+    [HttpPost("close")]
     [ProducesResponseType<CloseCashShiftResponse>(StatusCodes.Status200OK)]
     [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
