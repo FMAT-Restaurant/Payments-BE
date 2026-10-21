@@ -5,4 +5,8 @@
 GET {{PaymentsModule_HostAddress}}/api/v1/pagos/TX-20260901-000001
 Authorization: Bearer {{Token}}
 
+### Sales history (paged, filters are optional)
+GET {{PaymentsModule_HostAddress}}/api/v1/pagos?fecha_inicio=2026-09-01T00:00:00Z&fecha_fin=2026-09-30T23:59:59Z&estado=COMPLETADO&page_index=1&page_size=10
+Authorization: Bearer {{Token}}
+
 ###
