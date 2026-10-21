@@ -34,6 +34,8 @@ builder.Services.AddScoped<ChargeService>();
 
 builder.Services.AddDbContext<PaymentsDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("SqlServer")));
+builder.Services.AddScoped<IValidator<SalesExportQuery>, SalesExportQueryValidator>();
+builder.Services.AddScoped<SalesExportService>();
 
 builder.Services.AddMassTransit(x =>
 {
