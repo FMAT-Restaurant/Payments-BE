@@ -44,8 +44,12 @@ public static class QueriesDatabase
 
         var total = payments.Sum(p => p.Amount);
         await using var db = CreateContext();
-        var shift = new CashShift { CashierId = "cashier-1", InitialFund = 500m };
-        db.CashShifts.Add(shift);
+        var shift = await db.CashShifts.SingleOrDefaultAsync(s => s.CashierId == "cashier-1" && s.Status == CashShiftStatus.Open);
+        if (shift is null)
+        {
+            shift = new CashShift { CashierId = "cashier-1", InitialFund = 500m };
+            db.CashShifts.Add(shift);
+        }
 
         var transaction = new PaymentTransaction
         {
