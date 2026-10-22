@@ -1,3 +1,5 @@
+using System.Data;
+using System.Data.Common;
 using System.Security.Claims;
 using System.Text.Json;
 using FluentValidation;
@@ -23,6 +25,7 @@ public class CashShiftServiceTests : IAsyncLifetime
         ?? "Server=localhost,14330;Database=payments_tests;User Id=sa;Password=Payments_Dev_2026!;TrustServerCertificate=True";
 
     private readonly FailOnCashShiftClose _failure = new();
+    private readonly FailOnBreakdownQuery _queryFailure = new();
     private readonly ServiceProvider _provider;
 
     public CashShiftServiceTests()
@@ -30,7 +33,7 @@ public class CashShiftServiceTests : IAsyncLifetime
         _provider = new ServiceCollection()
             .AddLogging()
             .AddDistributedMemoryCache()
-            .AddDbContext<PaymentsDbContext>(o => o.UseSqlServer(ConnectionString).AddInterceptors(_failure))
+            .AddDbContext<PaymentsDbContext>(o => o.UseSqlServer(ConnectionString).AddInterceptors(_failure, _queryFailure))
             .AddScoped<PendingBillService>()
             .AddScoped<ChargeService>()
             .AddScoped<CashShiftService>()
@@ -304,7 +307,163 @@ public class CashShiftServiceTests : IAsyncLifetime
         Assert.Contains("\"diferencia\":-100.00", closeUnbalancedRes);
     }
 
+    [Fact]
+    public async Task Summary_aggregates_completed_sales_by_payment_method_and_ignores_cancelled_transactions()
+    {
+        var cashier = NewCashier();
+        var opened = await OpenAsync(new OpenCashShiftRequest(500.00m), cashier);
+
+        await RecordSaleAsync(cashier, billTotal: 200.00m, tip: 0.00m, new PaymentRequest(PaymentMethod.Cash, 200.00m, null));
+        await RecordSaleAsync(cashier, billTotal: 150.00m, tip: 0.00m, new PaymentRequest(PaymentMethod.CreditCard, 150.00m, "AUTH-1"));
+        await RecordSaleAsync(cashier, billTotal: 200.00m, tip: 0.00m, new PaymentRequest(PaymentMethod.DebitCard, 200.00m, "AUTH-2"));
+
+        // Cancelled transaction on the same shift must be ignored (AC2).
+        await using (var scope = _provider.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<PaymentsDbContext>();
+            db.Transactions.Add(new PaymentTransaction
+            {
+                Number = 999999 + Random.Shared.Next(1, 1000000),
+                Folio = $"TX-CANCEL-{Guid.NewGuid():N}"[..32],
+                DinningSessionId = Guid.NewGuid(),
+                CashShiftId = opened.Response!.CashShiftId,
+                CashierId = cashier,
+                Subtotal = 999.00m,
+                Taxes = 0.00m,
+                Tip = 0.00m,
+                Total = 999.00m,
+                Status = TransactionStatus.Cancelled,
+                CreatedAt = DateTimeOffset.UtcNow,
+                Payments = [new PaymentBreakdown { Method = PaymentMethod.Cash, Amount = 999.00m }]
+            });
+            await db.SaveChangesAsync();
+        }
+
+        var summary = await GetSummaryAsync(cashier);
+
+        Assert.Equal(ShiftSummaryOutcome.Found, summary.Outcome);
+        Assert.NotNull(summary.Response);
+        Assert.Equal(opened.Response.CashShiftId, summary.Response.CashShiftId);
+        Assert.Equal(CashShiftStatus.Open, summary.Response.ShiftStatus);
+        Assert.Equal(500.00m, summary.Response.InitialFund);
+        Assert.Equal(200.00m, summary.Response.Income.CashCollectedTotal);
+        Assert.Equal(350.00m, summary.Response.Income.CardsTotal);
+        Assert.Equal(700.00m, summary.Response.ExpectedCashInDrawer);
+    }
+
+    [Fact]
+    public async Task Summary_without_open_shift_returns_no_open_shift_and_404_from_controller()
+    {
+        var cashier = NewCashier();
+
+        var serviceResult = await GetSummaryAsync(cashier);
+        var notFound = await ControllerGetSummaryAsync(cashier);
+        var unauthorized = await ControllerGetSummaryAsync(cashierId: null);
+        await OpenAsync(new OpenCashShiftRequest(500.00m), cashier);
+        var ok = await ControllerGetSummaryAsync(cashier);
+
+        Assert.Equal(ShiftSummaryOutcome.NoOpenShift, serviceResult.Outcome);
+        Assert.Equal(StatusCodes.Status404NotFound, notFound.StatusCode);
+        Assert.Equal(StatusCodes.Status401Unauthorized, unauthorized.StatusCode);
+        Assert.Equal(StatusCodes.Status200OK, ok.StatusCode);
+        Assert.IsType<CashShiftSummaryResponse>(ok.Value);
+    }
+
+    [Fact]
+    public async Task Database_failure_on_summary_query_propagates_exception()
+    {
+        var cashier = NewCashier();
+        await OpenAsync(new OpenCashShiftRequest(500.00m), cashier);
+        _queryFailure.Enabled = true;
+
+        try
+        {
+            await Assert.ThrowsAsync<InvalidOperationException>(() => GetSummaryAsync(cashier));
+        }
+        finally
+        {
+            _queryFailure.Enabled = false;
+        }
+    }
+
+    [Fact]
+    public async Task Summary_under_read_committed_ignores_uncommitted_mixed_payment_transaction_in_progress()
+    {
+        var cashier = NewCashier();
+        var opened = await OpenAsync(new OpenCashShiftRequest(500.00m), cashier);
+        await RecordSaleAsync(cashier, billTotal: 200.00m, tip: 0.00m, new PaymentRequest(PaymentMethod.Cash, 200.00m, null));
+
+        await using var inFlightScope = _provider.CreateAsyncScope();
+        var inFlightDb = inFlightScope.ServiceProvider.GetRequiredService<PaymentsDbContext>();
+        await using var uncommittedTx = await inFlightDb.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted);
+
+        inFlightDb.Transactions.Add(new PaymentTransaction
+        {
+            Number = 2000000 + Random.Shared.Next(1, 1000000),
+            Folio = $"TX-INFLIGHT-{Guid.NewGuid():N}"[..32],
+            DinningSessionId = Guid.NewGuid(),
+            CashShiftId = opened.Response!.CashShiftId,
+            CashierId = cashier,
+            Subtotal = 300.00m,
+            Taxes = 0.00m,
+            Tip = 0.00m,
+            Total = 300.00m,
+            Status = TransactionStatus.Completed,
+            CreatedAt = DateTimeOffset.UtcNow,
+            Payments =
+            [
+                new PaymentBreakdown { Method = PaymentMethod.Cash, Amount = 120.00m },
+                new PaymentBreakdown { Method = PaymentMethod.CreditCard, Amount = 180.00m, AuthorizationReference = "AUTH-MIX" }
+            ]
+        });
+        await inFlightDb.SaveChangesAsync();
+
+        // While the mixed payment is still uncommitted, GetSummaryAsync reads only committed data.
+        var duringInFlight = await GetSummaryAsync(cashier);
+        Assert.Equal(ShiftSummaryOutcome.Found, duringInFlight.Outcome);
+        Assert.Equal(200.00m, duringInFlight.Response!.Income.CashCollectedTotal);
+        Assert.Equal(0.00m, duringInFlight.Response.Income.CardsTotal);
+        Assert.Equal(700.00m, duringInFlight.Response.ExpectedCashInDrawer);
+
+        await uncommittedTx.CommitAsync();
+
+        var afterCommit = await GetSummaryAsync(cashier);
+        Assert.Equal(320.00m, afterCommit.Response!.Income.CashCollectedTotal);
+        Assert.Equal(180.00m, afterCommit.Response.Income.CardsTotal);
+        Assert.Equal(820.00m, afterCommit.Response.ExpectedCashInDrawer);
+    }
+
+    [Fact]
+    public void Keeps_wire_contract_from_pmc9()
+    {
+        var shiftId = Guid.Parse("c92a5b67-8910-4f5c-b1d2-000000000001");
+        var calculatedAt = DateTimeOffset.Parse("2026-09-29T17:35:00Z");
+
+        var json = JsonSerializer.Serialize(new CashShiftSummaryResponse(
+            shiftId,
+            CashShiftStatus.Open,
+            500.00m,
+            new CashShiftIncomeBreakdown(200.00m, 350.00m),
+            700.00m,
+            calculatedAt));
+
+        Assert.Contains("\"turno_caja_id\":\"c92a5b67-8910-4f5c-b1d2-000000000001\"", json);
+        Assert.Contains("\"estado_turno\":\"ABIERTO\"", json);
+        Assert.Contains("\"fondo_inicial\":500.00", json);
+        Assert.Contains("\"ingresos\":{", json);
+        Assert.Contains("\"total_efectivo_cobrado\":200.00", json);
+        Assert.Contains("\"total_tarjetas\":350.00", json);
+        Assert.Contains("\"total_esperado_en_caja\":700.00", json);
+        Assert.Contains("\"fecha_calculo\":\"2026-09-29T17:35:00", json);
+    }
+
     private static string NewCashier() => $"cashier-{Guid.NewGuid()}";
+
+    private async Task<ShiftSummaryResult> GetSummaryAsync(string cashierId)
+    {
+        await using var scope = _provider.CreateAsyncScope();
+        return await scope.ServiceProvider.GetRequiredService<CashShiftService>().GetSummaryAsync(cashierId);
+    }
 
     private async Task<OpenShiftResult> OpenAsync(OpenCashShiftRequest request, string cashierId)
     {
@@ -345,6 +504,13 @@ public class CashShiftServiceTests : IAsyncLifetime
             [new ItemSnapshot("Tacos al Pastor", 1, billTotal, billTotal)]);
 
         return await scope.ServiceProvider.GetRequiredService<ChargeService>().ChargeAsync(request, cashierId);
+    }
+
+    private async Task<ObjectResult> ControllerGetSummaryAsync(string? cashierId)
+    {
+        await using var scope = _provider.CreateAsyncScope();
+        var controller = CreateController(scope.ServiceProvider, cashierId);
+        return ToObjectResult(await controller.GetSummary(CancellationToken.None));
     }
 
     private async Task<ObjectResult> ControllerOpenAsync(OpenCashShiftRequest request, string? cashierId)
@@ -412,6 +578,23 @@ public class CashShiftServiceTests : IAsyncLifetime
             }
 
             return base.SavingChangesAsync(eventData, result, cancellationToken);
+        }
+    }
+
+    // Simulates a database timeout while querying PaymentBreakdown for real-time shift summary (PMC-9 scenario 3).
+    private sealed class FailOnBreakdownQuery : DbCommandInterceptor
+    {
+        public bool Enabled { get; set; }
+
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command, CommandEventData eventData, InterceptionResult<DbDataReader> result, CancellationToken cancellationToken = default)
+        {
+            if (Enabled && command.CommandText.Contains("PaymentBreakdown", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("Simulated database timeout while querying PaymentBreakdown.");
+            }
+
+            return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
         }
     }
 }
