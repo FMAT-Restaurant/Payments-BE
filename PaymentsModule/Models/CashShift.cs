@@ -44,3 +44,15 @@ public record CloseCashShiftResponse(
     [property: JsonPropertyName("estado")] CashShiftStatus Status,
     [property: JsonPropertyName("diferencia")] decimal Difference,
     [property: JsonPropertyName("mensaje")] string Message);
+
+public record CashShiftIncomeBreakdown(
+    [property: JsonPropertyName("total_efectivo_cobrado")] decimal CashCollectedTotal,
+    [property: JsonPropertyName("total_tarjetas")] decimal CardsTotal);
+
+public record CashShiftSummaryResponse(
+    [property: JsonPropertyName("turno_caja_id")] Guid CashShiftId,
+    [property: JsonPropertyName("estado_turno")] CashShiftStatus ShiftStatus,
+    [property: JsonPropertyName("fondo_inicial")] decimal InitialFund,
+    [property: JsonPropertyName("ingresos")] CashShiftIncomeBreakdown Income,
+    [property: JsonPropertyName("total_esperado_en_caja")] decimal ExpectedCashInDrawer,
+    [property: JsonPropertyName("fecha_calculo")] DateTimeOffset CalculatedAt);
