@@ -53,9 +53,9 @@ public class ChargeService(PaymentsDbContext db, PendingBillService bills, IPubl
 
         await using var dbTransaction = await db.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
 
-        // UPDLOCK + HOLDLOCK serializes against CashShiftService.CloseAsync so a sale can never commit into a shift that is closing.
+        // UPDLOCK + INDEX seek locks only this cashier's open shift row, serializing against CloseAsync without blocking other cashiers.
         var shift = await db.CashShifts
-            .FromSqlInterpolated($"SELECT * FROM CashShifts WITH (UPDLOCK, ROWLOCK, HOLDLOCK) WHERE CashierId = {cashierId} AND Status = {nameof(CashShiftStatus.Open)}")
+            .FromSqlInterpolated($"SELECT * FROM CashShifts WITH (UPDLOCK, ROWLOCK, INDEX(IX_CashShifts_CashierId)) WHERE CashierId = {cashierId} AND Status = 'Open'")
             .AsNoTracking()
             .SingleOrDefaultAsync(ct);
         if (shift is null)

@@ -26,6 +26,7 @@ public class CashShiftServiceTests : IAsyncLifetime
 
     private readonly FailOnCashShiftClose _failure = new();
     private readonly FailOnBreakdownQuery _queryFailure = new();
+    private readonly BeforeTransactionInsertInterceptor _beforeInsert = new();
     private readonly ServiceProvider _provider;
 
     public CashShiftServiceTests()
@@ -33,7 +34,7 @@ public class CashShiftServiceTests : IAsyncLifetime
         _provider = new ServiceCollection()
             .AddLogging()
             .AddDistributedMemoryCache()
-            .AddDbContext<PaymentsDbContext>(o => o.UseSqlServer(ConnectionString).AddInterceptors(_failure, _queryFailure))
+            .AddDbContext<PaymentsDbContext>(o => o.UseSqlServer(ConnectionString).AddInterceptors(_failure, _queryFailure, _beforeInsert))
             .AddScoped<PendingBillService>()
             .AddScoped<ChargeService>()
             .AddScoped<CashShiftService>()
@@ -192,37 +193,69 @@ public class CashShiftServiceTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Concurrent_close_and_charge_never_leave_sale_in_closed_shift_outside_cut()
+    public async Task Close_started_while_charge_is_inserting_waits_for_lock_and_includes_the_sale()
     {
         var cashier = NewCashier();
         var opened = await OpenAsync(new OpenCashShiftRequest(500.00m), cashier);
 
-        var chargeTask = TryChargeOnShiftAsync(cashier, billTotal: 100.00m);
-        var closeTask = CloseAsync(new CloseCashShiftRequest(500.00m), cashier);
-        await Task.WhenAll(chargeTask, closeTask);
-
-        var chargeResult = await chargeTask;
-        var closeResult = await closeTask;
-        var savedShift = await FindShiftAsync(opened.Response!.CashShiftId);
-
-        Assert.Equal(CloseShiftOutcome.Closed, closeResult.Outcome);
-        Assert.NotNull(savedShift);
-
-        if (chargeResult.Outcome == ChargeOutcome.Completed)
+        Task<CloseShiftResult>? closeTask = null;
+        _beforeInsert.OnBeforeInsert = async () =>
         {
-            // Sale committed before close: ExpectedCash must include the $100 sale (500 + 100 = 600).
+            closeTask = Task.Run(() => CloseAsync(new CloseCashShiftRequest(600.00m), cashier));
+            await Task.WhenAny(closeTask, Task.Delay(150));
+            // CloseAsync must remain blocked on the UPDLOCK until ChargeAsync commits.
+            Assert.False(closeTask.IsCompleted);
+        };
+
+        try
+        {
+            var chargeResult = await TryChargeOnShiftAsync(cashier, billTotal: 100.00m);
+            Assert.Equal(ChargeOutcome.Completed, chargeResult.Outcome);
+            Assert.NotNull(closeTask);
+
+            var closeResult = await closeTask;
+            Assert.Equal(CloseShiftOutcome.Closed, closeResult.Outcome);
+            Assert.Equal(CashShiftStatus.Closed, closeResult.Response!.Status);
+            Assert.Equal(0.00m, closeResult.Response.Difference);
+
+            var savedShift = await FindShiftAsync(opened.Response!.CashShiftId);
+            Assert.NotNull(savedShift);
             Assert.Equal(600.00m, savedShift.ExpectedCash);
-            Assert.Equal(-100.00m, savedShift.Difference);
-            Assert.Equal(CashShiftStatus.Unbalanced, savedShift.Status);
-        }
-        else
-        {
-            // Close committed first: the charge must be rejected with NoOpenShift.
-            Assert.Equal(ChargeOutcome.NoOpenShift, chargeResult.Outcome);
-            Assert.Equal(500.00m, savedShift.ExpectedCash);
             Assert.Equal(0.00m, savedShift.Difference);
             Assert.Equal(CashShiftStatus.Closed, savedShift.Status);
         }
+        finally
+        {
+            _beforeInsert.OnBeforeInsert = null;
+        }
+    }
+
+    [Fact]
+    public async Task Locking_one_cashier_shift_does_not_block_another_cashier_from_charging_or_closing()
+    {
+        var cashierA = NewCashier();
+        var cashierB = NewCashier();
+        await OpenAsync(new OpenCashShiftRequest(500.00m), cashierA);
+        var openedB = await OpenAsync(new OpenCashShiftRequest(500.00m), cashierB);
+
+        await using var scopeA = _provider.CreateAsyncScope();
+        var dbA = scopeA.ServiceProvider.GetRequiredService<PaymentsDbContext>();
+        await using var txA = await dbA.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted);
+
+        var lockedShiftA = await dbA.CashShifts
+            .FromSqlInterpolated($"SELECT * FROM CashShifts WITH (UPDLOCK, ROWLOCK, INDEX(IX_CashShifts_CashierId)) WHERE CashierId = {cashierA} AND Status = 'Open'")
+            .SingleAsync();
+        Assert.Equal(cashierA, lockedShiftA.CashierId);
+
+        // While cashierA's shift row is locked, cashierB can charge and close without blocking.
+        await RecordSaleAsync(cashierB, billTotal: 100.00m, tip: 0.00m, new PaymentRequest(PaymentMethod.Cash, 100.00m, null));
+        var closedB = await CloseAsync(new CloseCashShiftRequest(600.00m), cashierB);
+
+        Assert.Equal(CloseShiftOutcome.Closed, closedB.Outcome);
+        Assert.Equal(CashShiftStatus.Closed, closedB.Response!.Status);
+        Assert.Equal(600.00m, (await FindShiftAsync(openedB.Response!.CashShiftId))!.ExpectedCash);
+
+        await txA.RollbackAsync();
     }
 
     [Fact]
@@ -595,6 +628,24 @@ public class CashShiftServiceTests : IAsyncLifetime
             }
 
             return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
+        }
+    }
+
+    // Forces a deterministic race between ChargeAsync and CloseAsync right before INSERT INTO [Transactions].
+    private sealed class BeforeTransactionInsertInterceptor : DbCommandInterceptor
+    {
+        public Func<Task>? OnBeforeInsert { get; set; }
+
+        public override async ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command, CommandEventData eventData, InterceptionResult<DbDataReader> result, CancellationToken cancellationToken = default)
+        {
+            if (OnBeforeInsert is { } callback && command.CommandText.Contains("INSERT INTO [Transactions]", StringComparison.Ordinal))
+            {
+                OnBeforeInsert = null;
+                await callback();
+            }
+
+            return await base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
         }
     }
 }

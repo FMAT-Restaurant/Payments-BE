@@ -34,6 +34,9 @@ builder.Services.AddScoped<ChargeService>();
 builder.Services.AddScoped<IValidator<OpenCashShiftRequest>, OpenCashShiftRequestValidator>();
 builder.Services.AddScoped<IValidator<CloseCashShiftRequest>, CloseCashShiftRequestValidator>();
 builder.Services.AddScoped<CashShiftService>();
+builder.Services.AddScoped<TransactionDetailService>();
+builder.Services.AddScoped<IValidator<SalesHistoryQuery>, SalesHistoryQueryValidator>();
+builder.Services.AddScoped<SalesHistoryService>();
 
 builder.Services.AddDbContext<PaymentsDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("SqlServer")));
