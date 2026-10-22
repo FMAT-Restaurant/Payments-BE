@@ -1,3 +1,8 @@
 @PaymentsModule_HostAddress = http://localhost:5150
+@Token = <JWT from the identity provider>
+
+### Ticket detail by folio
+GET {{PaymentsModule_HostAddress}}/api/v1/pagos/TX-20260901-000001
+Authorization: Bearer {{Token}}
 
 ###
