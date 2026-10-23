@@ -36,6 +36,7 @@ public class CashShiftServiceTests : IAsyncLifetime
             .AddDbContext<PaymentsDbContext>(o => o.UseSqlServer(ConnectionString).AddInterceptors(_failure, _beforeInsert))
             .AddScoped<PendingBillService>()
             .AddScoped<ChargeService>()
+            .AddSingleton<IChargeCalculationService, ChargeCalculationService>()
             .AddScoped<CashShiftService>()
             .AddScoped<IValidator<ChargeRequest>, ChargeRequestValidator>()
             .AddScoped<IValidator<OpenCashShiftRequest>, OpenCashShiftRequestValidator>()
