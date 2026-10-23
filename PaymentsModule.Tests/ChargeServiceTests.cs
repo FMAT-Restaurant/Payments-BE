@@ -37,6 +37,7 @@ public class ChargeServiceTests : IAsyncLifetime
             .AddDbContext<PaymentsDbContext>(o => o.UseSqlServer(ConnectionString).AddInterceptors(_failure))
             .AddScoped<PendingBillService>()
             .AddScoped<ChargeService>()
+            .AddSingleton<IChargeCalculationService, ChargeCalculationService>()
             .AddScoped<IValidator<ChargeRequest>, ChargeRequestValidator>()
             .AddMassTransitTestHarness(x =>
             {
