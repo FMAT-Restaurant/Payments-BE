@@ -140,6 +140,36 @@ Agreed while implementing and reviewing PMC-8:
 
 ---
 
+## Sale Cancellation Decisions (PMC-12)
+
+Confirmed by the PO (PMC-12-P1 to P13) unless marked **PENDING**:
+
+- **Route and roles:** `POST /api/v1/pagos/{folio}/cancelar`, protected with `[Authorize(Roles = "Gerente,Administrador")]` (exact, case-sensitive values). A `Cajero` gets `403`, a missing token `401`. The role claim may arrive as `role` or `ClaimTypes.Role`; `Program.cs` copies any `role` claim to `ClaimTypes.Role` in `JwtBearerEvents.OnTokenValidated` (idempotent), so both work with `[Authorize(Roles = ...)]`.
+- **Identity:** the authorizer is the `NameIdentifier` claim read in the controller and passed to the service. The story suggests `IHttpContextAccessor`; the PMC-8 convention (Services decoupled from `HttpContext`) wins.
+- **Naming:** code uses the repo's English names (`PaymentTransaction`, `PaymentBreakdown`, `SaleCancellation`) for the story's `TransaccionPago`, `DesglosePago`, `CancelacionVenta`. The table is `SaleCancellations`. The wire contract keeps `motivo`, `folio`, `estado`, `fecha_cancelacion`, `mensaje`.
+- **HTTP codes:** `200` cancelled, `400` invalid reason or body, `401` no identity, `403` wrong role, `404` unknown folio (exact, case-sensitive, opaque string; SQL Server's case-insensitive collation is compensated with an ordinal comparison), `409` already cancelled (`"La transacción ya se encuentra cancelada"`, exact text), `422` a card payment without authorization reference (checked before any refund), `502` the gateway could not refund (503 after retries, 4xx or timeout).
+- **Success message:** always `"Extorno procesado exitosamente. Se generó el ticket de cancelación."`, cash-only or card. No ticket entity is created; it is only response text.
+- **Reason:** required, trimmed, 1 to 500 characters, stored as `nvarchar(500)`.
+- **State and audit:** the sale is never deleted. `Status` goes `COMPLETADO` to `CANCELADO` and one `SaleCancellation` row is inserted in the same `ReadCommitted` transaction (`AuthorizerId`, `Reason`, `CancelledAt`, `GatewayReference`, `RefundedAmount`). A unique index on `TransactionId` allows one cancellation per sale.
+- **Concurrency:** the sale row is read with `WITH (UPDLOCK, ROWLOCK)` before anything else, so a double click waits, then finds the sale cancelled (`409`) and the card is never refunded twice. The lock is held while the gateway is called, bounded by the 30 s budget. The unique index is the last line of defence.
+- **Refunds:** only card payments (`TARJETA_CREDITO` and `TARJETA_DEBITO`) go through the gateway, one call per card `PaymentBreakdown`, for its stored `Amount` (a tip charged to the card is included). Cash never goes through the gateway. If any call fails, nothing is committed and the sale stays `COMPLETADO`.
+- **Gateway client:** `IBankGatewayClient` is a typed `HttpClient` with a Polly pipeline from `Microsoft.Extensions.Http.Resilience`: 3 retries with exponential backoff (5xx, 408, 429 and network errors; other 4xx are final) inside a 30 s timeout. There is no real gateway or sandbox, so `BankGateway:UseMock` is `true` by default and `MockBankGatewayHandler` answers the status in `BankGateway:MockStatusCode` (200 or 503).
+- **Recharge:** a cancelled session cannot be charged again; the unique index on `DinningSessionId` is kept and PMC-6 is not touched.
+- **Closed shifts:** cancelling is allowed without checking the shift (no extra cash validation). A cancelled sale no longer counts in a later close because `CloseAsync` only sums `Completed` rows. The totals already saved on an already closed shift are not recalculated.
+- **Events:** no outbox event is emitted for cancellations for now.
+- **Tests:** `SaleCancellationTests` and `BankGatewayClientTests` run against the real SQL Server (`payments_tests`, migrated with `ChargeServiceTests.EnsureMigratedAsync`) with a scripted HTTP handler as the bank. RBAC is checked through a real `TestServer` pipeline, because calling the controller directly skips the authorization filter. The scripted handler reads the request body as text, because the retry pipeline resends the same `HttpRequestMessage` and a stream read would close the cached `JsonContent` stream.
+- **Packages:** `Microsoft.Extensions.Http.Resilience` `10.0.0` and `Microsoft.AspNetCore.TestHost` `10.0.12`; restore, build and NuGet audit pass with no warnings.
+
+**PENDING** (not confirmed, to be validated before relying on them):
+
+- **Real gateway contract:** the endpoint (`POST refunds`), the JSON fields (`folio`, `referencia_autorizacion`, `monto`, `referencia_extorno`), the `Idempotency-Key` header and the gateway's support for it are provisional.
+- **Gateway succeeded but COMMIT failed:** the refund cannot be rolled back. The key `{TransactionId}:{PaymentBreakdownId}` is stable, so a retry should not refund twice, but this only holds if the real gateway honours the idempotency key. A failure after some card refunds succeeded is logged as an error for manual reconciliation.
+- **30 s timeout:** applied as the total budget of one refund call, retries included, not per attempt.
+- **Several card refunds:** their references are stored comma-separated in `SaleCancellation.GatewayReference` (up to 500 characters). A dedicated table could replace this if the audit needs it.
+- **Mock by default:** `BankGateway:UseMock` must be `false` in any environment with a real gateway.
+
+---
+
 ## General Rules
 
 - **Code Formatting:** All code contributions must adhere to repository standards and pass `dotnet format --verify-no-changes`.

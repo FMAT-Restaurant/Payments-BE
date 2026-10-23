@@ -349,6 +349,44 @@ namespace PaymentsModule.Data.Migrations
                     b.ToTable("Transactions");
                 });
 
+            modelBuilder.Entity("PaymentsModule.Models.SaleCancellation", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("AuthorizerId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("nvarchar(128)");
+
+                    b.Property<DateTimeOffset>("CancelledAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("GatewayReference")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<decimal>("RefundedAmount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<Guid>("TransactionId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TransactionId")
+                        .IsUnique();
+
+                    b.ToTable("SaleCancellations");
+                });
+
             modelBuilder.Entity("PaymentsModule.Models.TransactionItem", b =>
                 {
                     b.Property<Guid>("Id")
@@ -407,6 +445,15 @@ namespace PaymentsModule.Data.Migrations
                     b.HasOne("PaymentsModule.Models.CashShift", null)
                         .WithMany()
                         .HasForeignKey("CashShiftId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("PaymentsModule.Models.SaleCancellation", b =>
+                {
+                    b.HasOne("PaymentsModule.Models.PaymentTransaction", null)
+                        .WithMany()
+                        .HasForeignKey("TransactionId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
                 });
