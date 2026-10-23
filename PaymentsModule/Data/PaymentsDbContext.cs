@@ -10,6 +10,7 @@ public class PaymentsDbContext(DbContextOptions<PaymentsDbContext> options) : Db
 
     public DbSet<CashShift> CashShifts => Set<CashShift>();
     public DbSet<PaymentTransaction> Transactions => Set<PaymentTransaction>();
+    public DbSet<SaleCancellation> SaleCancellations => Set<SaleCancellation>();
 
     protected override void ConfigureConventions(ModelConfigurationBuilder builder)
     {
@@ -44,6 +45,16 @@ public class PaymentsDbContext(DbContextOptions<PaymentsDbContext> options) : Db
             e.HasOne<CashShift>().WithMany().HasForeignKey(t => t.CashShiftId).OnDelete(DeleteBehavior.Restrict);
             e.HasMany(t => t.Items).WithOne().HasForeignKey(i => i.TransactionId);
             e.HasMany(t => t.Payments).WithOne().HasForeignKey(p => p.TransactionId);
+        });
+
+        modelBuilder.Entity<SaleCancellation>(e =>
+        {
+            e.Property(c => c.AuthorizerId).HasMaxLength(128);
+            e.Property(c => c.Reason).HasMaxLength(500);
+            e.Property(c => c.GatewayReference).HasMaxLength(500);
+            // Idempotency guard: a sale is cancelled once, even under concurrent requests.
+            e.HasIndex(c => c.TransactionId).IsUnique();
+            e.HasOne<PaymentTransaction>().WithMany().HasForeignKey(c => c.TransactionId).OnDelete(DeleteBehavior.Restrict);
         });
 
         modelBuilder.Entity<TransactionItem>().Property(i => i.DishName).HasMaxLength(200);

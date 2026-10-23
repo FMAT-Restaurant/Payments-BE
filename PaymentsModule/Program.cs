@@ -1,5 +1,7 @@
+using System.Security.Claims;
 using FluentValidation;
 using MassTransit;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using OpenTelemetry;
 using OpenTelemetry.Metrics;
@@ -22,7 +24,24 @@ builder.Services.AddControllers();
 builder.Services.AddProblemDetails();
 
 // JWT forwarded by the API Gateway. Authority/audience come from Authentication:Schemes:Bearer in configuration.
-builder.Services.AddAuthentication().AddJwtBearer();
+builder.Services.AddAuthentication().AddJwtBearer(options =>
+    options.Events = new JwtBearerEvents
+    {
+        // The role may arrive as "role" or as ClaimTypes.Role; [Authorize(Roles = ...)] reads ClaimTypes.Role, so copy any "role" claim over.
+        OnTokenValidated = context =>
+        {
+            if (context.Principal?.Identity is ClaimsIdentity identity)
+            {
+                var roles = identity.FindAll("role").Where(r => !identity.HasClaim(ClaimTypes.Role, r.Value)).ToList();
+                foreach (var role in roles)
+                {
+                    identity.AddClaim(new Claim(ClaimTypes.Role, role.Value));
+                }
+            }
+
+            return Task.CompletedTask;
+        }
+    });
 builder.Services.AddAuthorization();
 
 builder.Services.AddStackExchangeRedisCache(options =>
@@ -37,6 +56,9 @@ builder.Services.AddScoped<CashShiftService>();
 builder.Services.AddScoped<TransactionDetailService>();
 builder.Services.AddScoped<IValidator<SalesHistoryQuery>, SalesHistoryQueryValidator>();
 builder.Services.AddScoped<SalesHistoryService>();
+builder.Services.AddScoped<IValidator<CancelSaleRequest>, CancelSaleRequestValidator>();
+builder.Services.AddScoped<SaleCancellationService>();
+builder.Services.AddBankGateway(builder.Configuration);
 
 builder.Services.AddDbContext<PaymentsDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("SqlServer")));
