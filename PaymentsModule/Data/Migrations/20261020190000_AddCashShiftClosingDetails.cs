@@ -56,10 +56,6 @@ namespace PaymentsModule.Data.Migrations
                 column: "CashierId",
                 unique: true,
                 filter: "[Status] = 'Open'");
-
-            migrationBuilder.Sql(
-                "ALTER DATABASE CURRENT SET READ_COMMITTED_SNAPSHOT ON WITH ROLLBACK IMMEDIATE;",
-                suppressTransaction: true);
         }
 
         /// <inheritdoc />

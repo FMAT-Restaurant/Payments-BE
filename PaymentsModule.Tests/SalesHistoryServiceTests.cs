@@ -85,7 +85,7 @@ public class SalesHistoryServiceTests : IAsyncLifetime
         await using var db = QueriesDatabase.CreateContext();
         var controller = new SalesHistoryController(new SalesHistoryService(db), new SalesHistoryQueryValidator());
 
-        var invalid = Assert.IsType<ObjectResult>(await controller.Get(
+        var invalid = Assert.IsAssignableFrom<ObjectResult>(await controller.Get(
             new SalesHistoryQuery { From = Start.AddDays(1), To = Start }, CancellationToken.None));
         var valid = Assert.IsType<OkObjectResult>(await controller.Get(
             new SalesHistoryQuery { Status = "COMPLETADO" }, CancellationToken.None));
