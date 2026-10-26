@@ -395,10 +395,11 @@ public class SaleCancellationTests : IAsyncLifetime
     [Theory]
     [InlineData("Gerente", StatusCodes.Status200OK)]
     [InlineData("Administrador", StatusCodes.Status200OK)]
+    [InlineData("Admin", StatusCodes.Status200OK)]
     [InlineData("Cajero", StatusCodes.Status403Forbidden)]
     [InlineData("gerente", StatusCodes.Status403Forbidden)]
-    [InlineData("Admin", StatusCodes.Status403Forbidden)]
-    public async Task Pipeline_authorizes_only_gerente_and_administrador(string role, int expectedStatus)
+    [InlineData("administrador", StatusCodes.Status403Forbidden)]
+    public async Task Pipeline_authorizes_only_gerente_administrador_and_admin(string role, int expectedStatus)
     {
         var sale = await SeedSaleAsync(0m, Cash(60m));
 

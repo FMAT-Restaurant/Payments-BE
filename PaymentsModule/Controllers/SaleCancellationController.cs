@@ -8,7 +8,7 @@ using PaymentsModule.Services;
 namespace PaymentsModule.Controllers;
 
 [ApiController]
-[Authorize(Roles = "Gerente,Administrador")]
+[Authorize(Roles = "Gerente,Administrador,Admin")]
 [Route("api/v1/pagos")]
 public class SaleCancellationController(SaleCancellationService cancellations, IValidator<CancelSaleRequest> validator) : ControllerBase
 {
