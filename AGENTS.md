@@ -149,10 +149,19 @@ Confirmed by the PO (PMC-13-P1 to P9). Most of the behaviour already existed sin
 - **Electronic overpayment (422):** only when electronic payments on their own exceed the amount due. A mixed payment whose cash produces the change (e.g. card 50 + cash 100 over 120) is valid. Exact `detail`: `"Los pagos electrónicos no pueden exceder el total de la cuenta"`. Checked in the service before any write; no `.Custom()` rule in `ChargeRequestValidator`, so validation errors stay `400` and the untrusted `detalles_snapshot` is not used for amounts.
 - **Card covering the whole bill plus cash:** the cash contributes nothing, no cash `PaymentBreakdown` row is stored, and the whole cash amount is returned as change.
 - **Not persisted:** neither the change nor the amount received is stored; they are computed in memory and only returned in the response. No entity or migration changes.
-- **Already paid (409):** any previous transaction of the session, including `CANCELADO`, answers `409` with `"La cuenta para esta sesión ya ha sido pagada"` (consistent with PMC-12-P11).
+- **Already paid (409):** any previous transaction of the session, including `CANCELADO`, answers `409` with `"La transacción ya ha sido pagada previamente"` (consistent with PMC-12-P11). This is the exact text of PMC-7 scenario 4; PMC-13 only says "la cuenta ya fue pagada", so both stories share one text on the same endpoint.
+- **Insufficient funds (422):** `detail` is `"Fondos insuficientes para cubrir el total"` (exact text of PMC-7 scenario 2), so the endpoint no longer answers in two languages depending on the error. The missing amount stays in the `deficit` extension and in `ChargeResult.Deficit`.
+- **Frontend impact:** the `detail` of the `409` and of the two `422` responses changed against `qa` (it was English or a different Spanish text). If the Frontend compares them, it must be told; it should rely on the status code and `deficit`.
 - **Database failure (500):** the `IDbContextTransaction` is rolled back and `UseExceptionHandler` answers the standard `500` ProblemDetails without internals.
 - **Precision (RNF-05):** every amount in the calculation, its result and `ChargeResponse.ChangeGiven` is `decimal`; no `float` or `double`.
 - **Tests:** `ChargeCalculationServiceTests` (pure, no database) and `ChangeCalculationTests` (real SQL Server, one test per Gherkin scenario; the `500` is checked through a real `TestServer` pipeline because calling the controller directly skips `UseExceptionHandler`).
+
+
+**PENDING** (not confirmed, to be validated before relying on them):
+
+- **Text of the 409:** aligned with PMC-7 scenario 4 after the review; to confirm with the PO that one text serves PMC-7 and PMC-13, and to tell the Frontend.
+- **Language of `detail`:** `BillNotFound` and `NoOpenShift` are still in English and the PMC-12 `404` as well, while the `409` and `422` texts above are Spanish. No story fixes those texts; the PO should choose one language for `detail`.
+- **Same endpoint as PMC-7:** its branch is in peer review and touches the same messages; whoever merges second must keep exactly the texts above.
 
 ---
 
