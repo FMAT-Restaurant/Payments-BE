@@ -159,7 +159,7 @@ Confirmed by the PO (PMC-13-P1 to P9). Most of the behaviour already existed sin
 
 **PENDING** (not confirmed, to be validated before relying on them):
 
-- **Text of the 409:** aligned with PMC-7 scenario 4 after the review; to confirm with the PO that one text serves PMC-7 and PMC-13, and to tell the Frontend.
+- **Frontend:** the `409` text was confirmed by the PO as the definitive one (aligned with PMC-7 scenario 4); the Frontend still has to be told that the `detail` changed.
 - **Language of `detail`:** `BillNotFound` and `NoOpenShift` are still in English and the PMC-12 `404` as well, while the `409` and `422` texts above are Spanish. No story fixes those texts; the PO should choose one language for `detail`.
 - **Same endpoint as PMC-7:** its branch is in peer review and touches the same messages; whoever merges second must keep exactly the texts above.
 
