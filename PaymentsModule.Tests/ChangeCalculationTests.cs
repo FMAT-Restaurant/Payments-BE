@@ -215,7 +215,7 @@ public class ChangeCalculationTests : IAsyncLifetime
 
         Assert.Equal(20m, Assert.IsType<ChargeResponse>(first.Value).ChangeGiven);
         Assert.Equal(StatusCodes.Status409Conflict, retry.StatusCode);
-        Assert.Equal("La cuenta para esta sesión ya ha sido pagada", Assert.IsType<ProblemDetails>(retry.Value).Detail);
+        Assert.Equal("La transacción ya ha sido pagada previamente", Assert.IsType<ProblemDetails>(retry.Value).Detail);
         Assert.Equal(1, await CountAsync(session));
         Assert.Single((await FindAsync(session))!.Payments);
     }
