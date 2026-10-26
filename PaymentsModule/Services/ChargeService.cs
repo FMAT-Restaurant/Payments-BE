@@ -42,11 +42,11 @@ public class ChargeService(PaymentsDbContext db, PendingBillService bills, IPubl
         switch (calculation.Status)
         {
             case ChargeCalculationStatus.InsufficientFunds:
-                // Exact text of PMC-7 scenario 2; the missing amount travels in the "deficit" extension of the ProblemDetails.
-                return new(ChargeOutcome.InsufficientFunds, Error: "Fondos insuficientes para cubrir el total", Deficit: calculation.Deficit);
+                // The missing amount travels in the "deficit" extension of the ProblemDetails.
+                return new(ChargeOutcome.InsufficientFunds, Error: "Insufficient funds to cover the total", Deficit: calculation.Deficit);
             case ChargeCalculationStatus.ElectronicOverpayment:
                 // Rejected before any write; exact text confirmed by the PO (PMC-13-P4).
-                return new(ChargeOutcome.ElectronicOverpayment, Error: "Los pagos electrónicos no pueden exceder el total de la cuenta");
+                return new(ChargeOutcome.ElectronicOverpayment, Error: "Electronic payments cannot exceed the bill total");
         }
 
         await using var dbTransaction = await db.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
@@ -114,5 +114,5 @@ public class ChargeService(PaymentsDbContext db, PendingBillService bills, IPubl
     }
 
     private static ChargeResult AlreadyPaid() =>
-        new(ChargeOutcome.AlreadyPaid, Error: "La transacción ya ha sido pagada previamente");
+        new(ChargeOutcome.AlreadyPaid, Error: "The transaction has already been paid");
 }

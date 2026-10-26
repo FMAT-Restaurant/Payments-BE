@@ -119,7 +119,7 @@ public class ChangeCalculationTests : IAsyncLifetime
         var result = await ControllerChargeAsync(Request(session, new PaymentRequest(card, 160m, "AUTH-1")), cashier);
 
         Assert.Equal(StatusCodes.Status422UnprocessableEntity, result.StatusCode);
-        Assert.Equal("Los pagos electrónicos no pueden exceder el total de la cuenta", Assert.IsType<ProblemDetails>(result.Value).Detail);
+        Assert.Equal("Electronic payments cannot exceed the bill total", Assert.IsType<ProblemDetails>(result.Value).Detail);
         Assert.Null(await FindAsync(session));
         Assert.Equal(0, await OutboxCountAsync(session));
     }
@@ -215,7 +215,7 @@ public class ChangeCalculationTests : IAsyncLifetime
 
         Assert.Equal(20m, Assert.IsType<ChargeResponse>(first.Value).ChangeGiven);
         Assert.Equal(StatusCodes.Status409Conflict, retry.StatusCode);
-        Assert.Equal("La transacción ya ha sido pagada previamente", Assert.IsType<ProblemDetails>(retry.Value).Detail);
+        Assert.Equal("The transaction has already been paid", Assert.IsType<ProblemDetails>(retry.Value).Detail);
         Assert.Equal(1, await CountAsync(session));
         Assert.Single((await FindAsync(session))!.Payments);
     }

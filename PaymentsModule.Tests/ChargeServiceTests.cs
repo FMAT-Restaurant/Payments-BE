@@ -241,10 +241,10 @@ public class ChargeServiceTests : IAsyncLifetime
         var anonymous = await ControllerChargeAsync(Request(session, Cash(250m)), cashierId: null);
 
         Assert.Equal(StatusCodes.Status422UnprocessableEntity, insufficient.StatusCode);
-        Assert.Equal("Fondos insuficientes para cubrir el total", ((ProblemDetails)insufficient.Value!).Detail);
+        Assert.Equal("Insufficient funds to cover the total", ((ProblemDetails)insufficient.Value!).Detail);
         Assert.Equal(50m, ((ProblemDetails)insufficient.Value!).Extensions["deficit"]);
         Assert.Equal(StatusCodes.Status409Conflict, duplicate.StatusCode);
-        Assert.Equal("La transacción ya ha sido pagada previamente", ((ProblemDetails)duplicate.Value!).Detail);
+        Assert.Equal("The transaction has already been paid", ((ProblemDetails)duplicate.Value!).Detail);
         Assert.Equal(StatusCodes.Status400BadRequest, invalid.StatusCode);
         Assert.Equal(StatusCodes.Status401Unauthorized, anonymous.StatusCode);
     }
