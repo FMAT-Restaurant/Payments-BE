@@ -57,6 +57,11 @@ public class SaleCancellationService(PaymentsDbContext db, IBankGatewayClient ga
         var references = new List<string>();
         var refunded = 0m;
 
+        // Point of no return: from the first refund to the COMMIT the caller's token is ignored. If the client disconnects after
+        // card 1 was refunded, aborting would roll the sale back (still COMPLETED) with money already returned and no audit row.
+        // Every gateway call is bounded by the Polly timeout, so this cannot hang.
+        var commitToken = CancellationToken.None;
+
         // One refund per card payment (cash never goes through the gateway). Any failure aborts: leaving the transaction
         // without COMMIT rolls everything back and the sale stays COMPLETED.
         foreach (var payment in cardPayments)
@@ -65,7 +70,7 @@ public class SaleCancellationService(PaymentsDbContext db, IBankGatewayClient ga
             {
                 // Stable key per payment: retrying a cancellation after a failed COMMIT does not refund the card again.
                 var refund = await gateway.RefundAsync(
-                    new BankRefundRequest(sale.Folio, payment.AuthorizationReference!, payment.Amount, $"{sale.Id}:{payment.Id}"), ct);
+                    new BankRefundRequest(sale.Folio, payment.AuthorizationReference!, payment.Amount, $"{sale.Id}:{payment.Id}"), commitToken);
                 references.Add(refund.RefundReference);
                 refunded += payment.Amount;
             }
@@ -93,7 +98,7 @@ public class SaleCancellationService(PaymentsDbContext db, IBankGatewayClient ga
 
         try
         {
-            await db.SaveChangesAsync(ct);
+            await db.SaveChangesAsync(commitToken);
         }
         // 2601/2627: duplicate key on the unique index of SaleCancellations.TransactionId (last line of defence).
         catch (DbUpdateException ex) when (ex.InnerException is SqlException { Number: 2601 or 2627 })
@@ -101,7 +106,7 @@ public class SaleCancellationService(PaymentsDbContext db, IBankGatewayClient ga
             return AlreadyCancelled();
         }
 
-        await dbTransaction.CommitAsync(ct);
+        await dbTransaction.CommitAsync(commitToken);
 
         return new(CancelSaleOutcome.Cancelled, new CancelSaleResponse(sale.Folio, sale.Status, cancelledAt, SuccessMessage));
     }

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Polly.CircuitBreaker;
 using Polly.Timeout;
 
 namespace PaymentsModule.Services;
@@ -53,8 +54,9 @@ public class BankGatewayClient(HttpClient http) : IBankGatewayClient
 
             return new BankRefundResult(body.RefundReference);
         }
-        // Retries are exhausted or the time budget is spent. A caller that cancelled the request is not a gateway failure.
-        catch (Exception ex) when ((ex is HttpRequestException or TimeoutRejectedException or OperationCanceledException or JsonException)
+        // Retries are exhausted, the time budget is spent or the circuit is open (PMC-7 adds a circuit breaker to this pipeline).
+        // A caller that cancelled the request is not a gateway failure.
+        catch (Exception ex) when ((ex is HttpRequestException or TimeoutRejectedException or BrokenCircuitException or OperationCanceledException or JsonException)
             && !ct.IsCancellationRequested)
         {
             throw new BankGatewayException("The bank gateway could not be reached.", ex);
