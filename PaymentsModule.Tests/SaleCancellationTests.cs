@@ -1,11 +1,14 @@
 using System.Collections.Concurrent;
 using System.Net;
+using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Security.Claims;
+using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using FluentValidation;
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
@@ -17,6 +20,8 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Microsoft.IdentityModel.JsonWebTokens;
+using Microsoft.IdentityModel.Tokens;
 using PaymentsModule.Controllers;
 using PaymentsModule.Data;
 using PaymentsModule.Models;
@@ -211,6 +216,23 @@ public class SaleCancellationTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Client_disconnecting_after_the_first_refund_still_completes_the_cancellation()
+    {
+        // The caller's token is ignored from the first refund to the COMMIT: aborting here would leave card 1 refunded and the sale COMPLETED.
+        using var disconnect = new CancellationTokenSource();
+        _bank.OnCall = () => disconnect.Cancel();
+        var sale = await SeedSaleAsync(0m, Card(100m, "AUTH-1"), (PaymentMethod.DebitCard, 50m, "AUTH-2"));
+
+        var result = await CancelAsync(sale.Folio, ct: disconnect.Token);
+
+        Assert.Equal(CancelSaleOutcome.Cancelled, result.Outcome);
+        Assert.Equal(2, _bank.Calls.Count);
+        Assert.Equal(TransactionStatus.Cancelled, (await FindSaleAsync(sale.Folio)).Status);
+        var cancellation = Assert.Single(await FindCancellationsAsync(sale.Id));
+        Assert.Equal(150m, cancellation.RefundedAmount);
+    }
+
+    [Fact]
     public async Task Gateway_rejection_is_not_retried_and_aborts_the_cancellation()
     {
         _bank.Default = HttpStatusCode.BadRequest;
@@ -388,6 +410,32 @@ public class SaleCancellationTests : IAsyncLifetime
         Assert.Equal(expectedStatus == StatusCodes.Status200OK ? TransactionStatus.Cancelled : TransactionStatus.Completed, (await FindSaleAsync(sale.Folio)).Status);
     }
 
+    // Program.cs registers JwtBearer with its defaults and relies on its claim mapping: "role" becomes ClaimTypes.Role and "sub" NameIdentifier.
+    [Theory]
+    [InlineData("Gerente")]
+    [InlineData("Administrador")]
+    public async Task Jwt_bearer_maps_the_role_and_sub_claims_so_the_endpoint_authorizes(string role)
+    {
+        var sale = await SeedSaleAsync(0m, Cash(60m));
+
+        var (status, _) = await PostWithJwtAsync(sale.Folio, CreateJwt("manager-jwt", role));
+
+        Assert.Equal(HttpStatusCode.OK, status);
+        var cancellation = Assert.Single(await FindCancellationsAsync(sale.Id));
+        Assert.Equal("manager-jwt", cancellation.AuthorizerId);
+    }
+
+    [Fact]
+    public async Task Jwt_bearer_with_the_cashier_role_is_forbidden()
+    {
+        var sale = await SeedSaleAsync(0m, Cash(60m));
+
+        var (status, _) = await PostWithJwtAsync(sale.Folio, CreateJwt("cashier-jwt", "Cajero"));
+
+        Assert.Equal(HttpStatusCode.Forbidden, status);
+        Assert.Empty(await FindCancellationsAsync(sale.Id));
+    }
+
     [Fact]
     public async Task Pipeline_rejects_a_request_without_a_token_with_401()
     {
@@ -491,10 +539,11 @@ public class SaleCancellationTests : IAsyncLifetime
         return sale;
     }
 
-    private async Task<CancelSaleResult> CancelAsync(string folio, string reason = "Customer reported an error in the bill", string authorizerId = "manager-1")
+    private async Task<CancelSaleResult> CancelAsync(
+        string folio, string reason = "Customer reported an error in the bill", string authorizerId = "manager-1", CancellationToken ct = default)
     {
         await using var scope = _provider.CreateAsyncScope();
-        return await scope.ServiceProvider.GetRequiredService<SaleCancellationService>().CancelAsync(folio, reason, authorizerId);
+        return await scope.ServiceProvider.GetRequiredService<SaleCancellationService>().CancelAsync(folio, reason, authorizerId, ct);
     }
 
     private async Task<ObjectResult> ControllerCancelAsync(string folio, CancelSaleRequest request, string? authorizerId)
@@ -520,8 +569,49 @@ public class SaleCancellationTests : IAsyncLifetime
         };
     }
 
+    private const string JwtSigningKey = "unit-test-signing-key-with-at-least-32-bytes";
+
+    private static string CreateJwt(string subject, string role) =>
+        new JsonWebTokenHandler().CreateToken(new SecurityTokenDescriptor
+        {
+            Subject = new ClaimsIdentity(new[] { new Claim("sub", subject), new Claim("role", role) }),
+            Expires = DateTime.UtcNow.AddMinutes(5),
+            SigningCredentials = new SigningCredentials(new SymmetricSecurityKey(Encoding.UTF8.GetBytes(JwtSigningKey)), SecurityAlgorithms.HmacSha256)
+        });
+
     // Direct controller calls skip the authorization filter, so RBAC is checked through a real TestServer pipeline.
-    private async Task<(HttpStatusCode Status, string Body)> PostThroughPipelineAsync(string folio, string? user, string? role)
+    private Task<(HttpStatusCode Status, string Body)> PostThroughPipelineAsync(string folio, string? user, string? role) =>
+        PostCancelAsync(
+            folio,
+            services => services.AddAuthentication("Test").AddScheme<AuthenticationSchemeOptions, TestAuthHandler>("Test", _ => { }),
+            request =>
+            {
+                if (user is not null)
+                {
+                    request.Headers.Add("X-Test-User", user);
+                }
+
+                if (role is not null)
+                {
+                    request.Headers.Add("X-Test-Role", role);
+                }
+            });
+
+    // Same pipeline with the real JwtBearer handler (default claim mapping), signed with a local key instead of an authority.
+    private Task<(HttpStatusCode Status, string Body)> PostWithJwtAsync(string folio, string token) =>
+        PostCancelAsync(
+            folio,
+            services => services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer(options =>
+                options.TokenValidationParameters = new TokenValidationParameters
+                {
+                    ValidateIssuer = false,
+                    ValidateAudience = false,
+                    IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(JwtSigningKey))
+                }),
+            request => request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token));
+
+    private async Task<(HttpStatusCode Status, string Body)> PostCancelAsync(
+        string folio, Action<IServiceCollection> addAuthentication, Action<HttpRequestMessage> decorate)
     {
         using var host = await new HostBuilder()
             .ConfigureWebHost(web =>
@@ -530,7 +620,7 @@ public class SaleCancellationTests : IAsyncLifetime
                 web.ConfigureServices(services =>
                 {
                     services.AddControllers().AddApplicationPart(typeof(SaleCancellationController).Assembly);
-                    services.AddAuthentication("Test").AddScheme<AuthenticationSchemeOptions, TestAuthHandler>("Test", _ => { });
+                    addAuthentication(services);
                     services.AddAuthorization();
                     RegisterApplication(services);
                 });
@@ -549,15 +639,7 @@ public class SaleCancellationTests : IAsyncLifetime
         {
             Content = JsonContent.Create(new { motivo = "Customer reported an error in the bill" })
         };
-        if (user is not null)
-        {
-            request.Headers.Add("X-Test-User", user);
-        }
-
-        if (role is not null)
-        {
-            request.Headers.Add("X-Test-Role", role);
-        }
+        decorate(request);
 
         using var response = await client.SendAsync(request);
         return (response.StatusCode, await response.Content.ReadAsStringAsync());
@@ -590,6 +672,9 @@ public class SaleCancellationTests : IAsyncLifetime
 
         public ConcurrentQueue<RecordedRefund> Calls { get; } = new();
 
+        /// <summary>Runs after each call is recorded, before the answer; lets a test act while a refund is in flight.</summary>
+        public Action? OnCall { get; set; }
+
         public void Script(params HttpStatusCode[] statuses)
         {
             foreach (var status in statuses)
@@ -604,6 +689,7 @@ public class SaleCancellationTests : IAsyncLifetime
             var json = await request.Content!.ReadAsStringAsync(cancellationToken);
             var body = JsonSerializer.Deserialize<BankRefundHttpRequest>(json, JsonSerializerOptions.Web);
             Calls.Enqueue(new RecordedRefund(body!, request.Headers.GetValues("Idempotency-Key").Single()));
+            OnCall?.Invoke();
 
             var response = new HttpResponseMessage(_script.TryDequeue(out var next) ? next : Default);
             if (response.IsSuccessStatusCode)

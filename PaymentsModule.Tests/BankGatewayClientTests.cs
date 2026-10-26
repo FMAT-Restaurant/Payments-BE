@@ -2,6 +2,7 @@ using System.Net;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using PaymentsModule.Services;
+using Polly.CircuitBreaker;
 
 namespace PaymentsModule.Tests;
 
@@ -55,6 +56,21 @@ public class BankGatewayClientTests
         using var provider = services.BuildServiceProvider();
 
         await Assert.ThrowsAsync<BankGatewayException>(() => provider.GetRequiredService<IBankGatewayClient>().RefundAsync(Refund()));
+    }
+
+    [Fact]
+    public async Task An_open_circuit_is_reported_as_a_gateway_failure()
+    {
+        // PMC-7 adds a circuit breaker to this pipeline: an open circuit must answer 502 like any other gateway failure, not 500.
+        using var http = new HttpClient(new ThrowingHandler(new BrokenCircuitException("The circuit is open."))) { BaseAddress = new Uri("http://bank.test/") };
+
+        await Assert.ThrowsAsync<BankGatewayException>(() => new BankGatewayClient(http).RefundAsync(Refund()));
+    }
+
+    private sealed class ThrowingHandler(Exception exception) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            Task.FromException<HttpResponseMessage>(exception);
     }
 
     private sealed class HangingHandler : HttpMessageHandler
