@@ -20,7 +20,7 @@ public record CancelSaleResult(CancelSaleOutcome Outcome, CancelSaleResponse? Re
 public class SaleCancellationService(PaymentsDbContext db, IBankGatewayClient gateway, ILogger<SaleCancellationService> logger)
 {
     public const string SuccessMessage = "Extorno procesado exitosamente. Se generó el ticket de cancelación.";
-    public const string AlreadyCancelledMessage = "La transacción ya se encuentra cancelada";
+    public const string AlreadyCancelledMessage = "The transaction has already been cancelled";
 
     /// <summary>Cancels a completed sale. <paramref name="authorizerId"/> must come from the caller's JWT, never from the payload.</summary>
     public async Task<CancelSaleResult> CancelAsync(string folio, string reason, string authorizerId, CancellationToken ct = default)

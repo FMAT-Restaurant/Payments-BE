@@ -167,7 +167,7 @@ public class SaleCancellationTests : IAsyncLifetime
 
         Assert.Equal(CancelSaleOutcome.Cancelled, first.Outcome);
         Assert.Equal(CancelSaleOutcome.AlreadyCancelled, second.Outcome);
-        Assert.Equal("La transacción ya se encuentra cancelada", second.Error);
+        Assert.Equal("The transaction has already been cancelled", second.Error);
         Assert.Single(_bank.Calls);
         Assert.Single(await FindCancellationsAsync(sale.Id));
     }
@@ -387,7 +387,7 @@ public class SaleCancellationTests : IAsyncLifetime
         Assert.Equal(StatusCodes.Status502BadGateway, badGateway.StatusCode);
         Assert.Equal(StatusCodes.Status200OK, ok.StatusCode);
         Assert.Equal(StatusCodes.Status409Conflict, conflict.StatusCode);
-        Assert.Equal("La transacción ya se encuentra cancelada", ((ProblemDetails)conflict.Value!).Detail);
+        Assert.Equal("The transaction has already been cancelled", ((ProblemDetails)conflict.Value!).Detail);
     }
 
     // ---- AC1 / Scenario 1: RBAC through the real ASP.NET Core pipeline ----

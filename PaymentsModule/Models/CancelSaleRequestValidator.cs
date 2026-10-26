@@ -10,7 +10,7 @@ public class CancelSaleRequestValidator : AbstractValidator<CancelSaleRequest>
     {
         // Required (null, empty and whitespace-only fail). The reason is trimmed before it is stored, so the limit applies to the trimmed text.
         RuleFor(x => x.Reason)
-            .NotEmpty()
+            .NotEmpty().WithMessage("'motivo' is required.")
             .Must(reason => reason is null || reason.Trim().Length <= MaxReasonLength)
             .WithMessage($"'motivo' must not exceed {MaxReasonLength} characters.");
     }
