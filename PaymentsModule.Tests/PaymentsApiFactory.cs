@@ -36,12 +36,12 @@ public sealed class PaymentsApiFactory : WebApplicationFactory<Program>
     public FailingQueries Failures { get; } = new();
 
     /// <summary>A caller without credentials, as if the request arrived with no JWT.</summary>
-    public HttpClient CreateAnonymousClient() => CreateClient(ClientOptions());
+    public HttpClient CreateAnonymousClient() => CreateClient(HttpsClientOptions());
 
     /// <summary>An authenticated caller; <paramref name="roles"/> become role claims for <c>[Authorize(Roles = ...)]</c>.</summary>
     public HttpClient CreateAuthenticatedClient(string user = "cashier-http-tests", params string[] roles)
     {
-        var client = CreateClient(ClientOptions());
+        var client = CreateClient(HttpsClientOptions());
         client.DefaultRequestHeaders.Add(TestAuthHandler.UserHeader, user);
         if (roles.Length > 0)
         {
@@ -52,7 +52,7 @@ public sealed class PaymentsApiFactory : WebApplicationFactory<Program>
     }
 
     // HTTPS so UseHttpsRedirection never answers a redirect instead of the real status code.
-    private static WebApplicationFactoryClientOptions ClientOptions() => new()
+    private static WebApplicationFactoryClientOptions HttpsClientOptions() => new()
     {
         BaseAddress = new Uri("https://localhost"),
         AllowAutoRedirect = false
