@@ -68,6 +68,7 @@ jobs:
         uses: SonarSource/sonarqube-scan-action@v8.2.2
         with:
           args: >
+            -Dsonar.organization=FMAT-Restaurant
             -Dsonar.projectKey=FMAT-Restaurant_Payments-BE
             -Dsonar.sources=PaymentsModule
             -Dsonar.qualitygate.wait=true
