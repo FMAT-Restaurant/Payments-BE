@@ -21,19 +21,18 @@ jobs:
       contents: read
     env:
       SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-      ConnectionStrings__SqlServer: "Server=localhost,1433;Database=payments_tests;User Id=sa;Password=Payments_Ci_2026!;TrustServerCertificate=True"
-
+      ConnectionStrings__SqlServer: "Server=localhost,1433;Database=payments_tests;User Id=sa;Password=${{ secrets.MSSQL_SA_PASSWORD }};TrustServerCertificate=True"
     # ChargeServiceTests run against a real SQL Server (transactions, sequence, unique index, outbox).
     services:
       sqlserver:
         image: mcr.microsoft.com/mssql/server:2022-latest
         env:
           ACCEPT_EULA: "Y"
-          MSSQL_SA_PASSWORD: "Payments_Ci_2026!"
+          MSSQL_SA_PASSWORD: ${{ secrets.MSSQL_SA_PASSWORD }}
         ports:
           - 1433:1433
         options: >-
-          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P Payments_Ci_2026! -Q 'SELECT 1' -b -o /dev/null"
+          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P '${{ secrets.MSSQL_SA_PASSWORD }}' -Q 'SELECT 1' -b -o /dev/null"
           --health-interval 10s
           --health-retries 20
 
@@ -94,7 +93,7 @@ jobs:
 
       - name: Discord notification on failure
         if: failure()
-        uses: Ilshidur/action-discord@0.4.0
+        uses: Ilshidur/action-discord@ad5235de713df3ef38022185499b02ffe93b7efe
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
         with: 
