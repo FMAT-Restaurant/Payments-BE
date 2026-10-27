@@ -99,16 +99,34 @@ public class SaleCancellationService(PaymentsDbContext db, IBankGatewayClient ga
         try
         {
             await db.SaveChangesAsync(commitToken);
+            await dbTransaction.CommitAsync(commitToken);
         }
         // 2601/2627: duplicate key on the unique index of SaleCancellations.TransactionId (last line of defence).
         catch (DbUpdateException ex) when (ex.InnerException is SqlException { Number: 2601 or 2627 })
         {
+            LogRefundsWithoutCancellation(ex, sale.Folio, references, refunded);
             return AlreadyCancelled();
         }
-
-        await dbTransaction.CommitAsync(commitToken);
+        catch (Exception ex)
+        {
+            // The bank already returned the money but the sale stays COMPLETED: leave a trace so it can be reconciled by hand.
+            LogRefundsWithoutCancellation(ex, sale.Folio, references, refunded);
+            throw;
+        }
 
         return new(CancelSaleOutcome.Cancelled, new CancelSaleResponse(sale.Folio, sale.Status, cancelledAt, SuccessMessage));
+    }
+
+    private void LogRefundsWithoutCancellation(Exception ex, string folio, List<string> references, decimal refunded)
+    {
+        if (references.Count == 0)
+        {
+            return;
+        }
+
+        logger.LogError(ex,
+            "Cancellation of {Folio} was not saved after the gateway refunded {RefundedAmount} (references: {RefundReferences}); the sale stays COMPLETED and needs manual reconciliation.",
+            folio, refunded, string.Join(",", references));
     }
 
     private static CancelSaleResult AlreadyCancelled() =>
