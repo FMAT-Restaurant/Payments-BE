@@ -97,7 +97,8 @@ public class PrintTicketTests : IAsyncLifetime
         Assert.Equal(StatusCodes.Status404NotFound, problem.Status);
     }
 
-    // Scenario 3: the exception reaches the global handler (UseExceptionHandler), which answers 500 without internals.
+    // Scenario 3, service side: the exception propagates out of the controller untouched. The 500 answered by
+    // UseExceptionHandler is asserted over HTTP in PrintTicketHttpTests.
     [Fact]
     public async Task Database_timeout_aborts_the_ticket_and_propagates_to_the_exception_handler()
     {
@@ -157,6 +158,7 @@ public class PrintTicketTests : IAsyncLifetime
         Assert.Equal(JsonSerializer.Serialize(first), JsonSerializer.Serialize(second));
     }
 
+    // The real 401 for a request without token is asserted over HTTP in PrintTicketHttpTests.
     [Fact]
     public void Endpoint_requires_an_authenticated_caller()
     {
@@ -174,7 +176,6 @@ public class PrintTicketTests : IAsyncLifetime
         return await controller.GetPrintTicket(folio, CancellationToken.None);
     }
 
-    // A sale shaped like ChargeService persists it: items as plain text, electronic payments first.
     private async Task<PaymentTransaction> InsertSaleAsync(
         DateTimeOffset soldAt,
         TransactionStatus status,
@@ -182,7 +183,18 @@ public class PrintTicketTests : IAsyncLifetime
         List<PaymentBreakdown>? payments = null)
     {
         await using var scope = _provider.CreateAsyncScope();
-        var db = scope.ServiceProvider.GetRequiredService<PaymentsDbContext>();
+        return await SeedSaleAsync(scope.ServiceProvider.GetRequiredService<PaymentsDbContext>(), soldAt, status, items, payments);
+    }
+
+    // A sale shaped like ChargeService persists it: items as plain text, electronic payments first.
+    // Also used by PrintTicketHttpTests, so both suites draw folio numbers from the same counter.
+    internal static async Task<PaymentTransaction> SeedSaleAsync(
+        PaymentsDbContext db,
+        DateTimeOffset soldAt,
+        TransactionStatus status,
+        List<TransactionItem>? items = null,
+        List<PaymentBreakdown>? payments = null)
+    {
         var shift = new CashShift { CashierId = $"cashier-{Guid.NewGuid()}", InitialFund = 500m };
         db.CashShifts.Add(shift);
         await db.SaveChangesAsync();
