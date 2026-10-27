@@ -21,19 +21,19 @@ jobs:
       contents: read
     env:
       SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-      MSSQL_SA_PASSWORD: ${{ secrets.MSSQL_SA_PASSWORD }}
-      ConnectionStrings__SqlServer: "Server=localhost,1433;Database=payments_tests;User Id=sa;Password=${{ secrets.MSSQL_SA_PASSWORD }};TrustServerCertificate=True"
+      ConnectionStrings__SqlServer: "Server=localhost,1433;Database=payments_tests;User Id=sa;Password=Ci_Pass!${{ github.run_id }};TrustServerCertificate=True"
+    
     # ChargeServiceTests run against a real SQL Server (transactions, sequence, unique index, outbox).
     services:
       sqlserver:
         image: mcr.microsoft.com/mssql/server:2022-latest
         env:
           ACCEPT_EULA: "Y"
-          MSSQL_SA_PASSWORD: ${{ env.MSSQL_SA_PASSWORD }} # 2. Lo llamas con 'env' aquí
+          MSSQL_SA_PASSWORD: "Ci_Pass!${{ github.run_id }}"
         ports:
           - 1433:1433
         options: >-
-          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P '${{ env.MSSQL_SA_PASSWORD }}' -Q 'SELECT 1' -b -o /dev/null"
+          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P 'Ci_Pass!${{ github.run_id }}' -Q 'SELECT 1' -b -o /dev/null"
           --health-interval 10s
           --health-retries 20
 
