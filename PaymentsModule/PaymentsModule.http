@@ -10,6 +10,10 @@ Content-Type: application/json
   "fondo_inicial": 500.00
 }
 
+### Get real-time cash shift summary / arqueo (200 OK / 404 Not Found if no open shift)
+GET {{PaymentsModule_HostAddress}}/api/v1/cash-shifts/summary
+Authorization: Bearer {{Token}}
+
 ### Close cash shift (200 OK / 422 Unprocessable Entity if no open shift)
 POST {{PaymentsModule_HostAddress}}/api/v1/cash-shifts/close
 Authorization: Bearer {{Token}}

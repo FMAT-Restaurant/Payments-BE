@@ -140,6 +140,17 @@ Agreed while implementing and reviewing PMC-8:
 
 ---
 
+## Real-Time Cash Shift Summary Decisions (PMC-9)
+
+Agreed while implementing PMC-9:
+
+- **Route:** `GET /api/v1/cash-shifts/summary` on `CashShiftsController` follows the English `Code Language` convention (replacing the Spanish `/api/v1/caja/arqueo` from the story; to be aligned with Frontend / API Gateway). Wire JSON property names keep the Spanish snake_case contract (`turno_caja_id`, `estado_turno`, `fondo_inicial`, `ingresos.total_efectivo_cobrado`, `ingresos.total_tarjetas`, `total_esperado_en_caja`, `fecha_calculo`).
+- **Identity & no open shift:** the cashier ID is extracted exclusively from the JWT `NameIdentifier` (`sub`) claim (`401 Unauthorized` if missing). If the cashier has no `Open` shift, `GET /api/v1/cash-shifts/summary` returns `404 Not Found` (`ProblemDetails`), as required by PMC-9 Scenario 2.
+- **Server-side SQL aggregation (`CalculateShiftTotalsAsync`):** both `CashShiftService.GetSummaryAsync` (PMC-9) and `CashShiftService.CloseAsync` (PMC-8) share the same single atomic server-side LINQ aggregation using `.AsNoTracking()` and conditional `.Sum(...)` over `TransactionStatus.Completed` rows in one query so raw sales by method and tip deductions are evaluated from the exact same statement snapshot, individual transactions are never loaded into memory, and the real-time summary always matches the final close calculation (excluding tips from `total_efectivo_cobrado`, `total_tarjetas`, and `total_esperado_en_caja`).
+- **Read Committed Snapshot Isolation (`RCSI`):** `READ_COMMITTED_SNAPSHOT ON` is enabled on the SQL Server database via dedicated migration `20261022120000_EnableReadCommittedSnapshot` and `GetSummaryAsync` queries under ambient Read Committed with statement-level snapshot isolation (no explicit transaction) so concurrent uncommitted sales in progress are ignored without blocking readers or producing dirty reads (PMC-9 Scenario 4).
+
+---
+
 ## General Rules
 
 - **Code Formatting:** All code contributions must adhere to repository standards and pass `dotnet format --verify-no-changes`.
