@@ -1,0 +1,35 @@
+# Local infrastructure for Payments-BE only. The fixed project name keeps containers,
+# network and volumes isolated from other local stacks (e.g. Booking-service).
+name: payments
+
+services:
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: payments-sqlserver
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "Payments_Dev_2026!" # local development only
+    ports:
+      - "14330:1433" # avoids clashing with a native SQL Server install
+    volumes:
+      - sqlserver-data:/var/opt/mssql
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -Q 'SELECT 1' -b -o /dev/null"]
+      interval: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    container_name: payments-redis
+    ports:
+      - "6379:6379"
+
+  rabbitmq:
+    image: rabbitmq:4-management-alpine
+    container_name: payments-rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+
+volumes:
+  sqlserver-data:
