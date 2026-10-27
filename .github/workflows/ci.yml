@@ -3,12 +3,9 @@ name: CI/CD Pipeline
 on:
   push:
     branches: ["main", "qa"]
-
   pull_request:
     branches: ["main", "qa"]
-
   workflow_dispatch:
-
   schedule:
     - cron: "0 0 * * 0"
 
@@ -51,11 +48,36 @@ jobs:
         with:
           dotnet-version: "10.0.x"
 
+      # Java 17 es requerido internamente por el analizador de SonarQube
+      - name: "setup Java 17"
+        uses: actions/setup-java@v4
+        with:
+          java-version: 17
+          distribution: 'zulu'
+
       - name: "install dependencies"
         run: dotnet restore
 
       - name: "verify formatting (lint)"
         run: dotnet format --verify-no-changes
+
+      # Instalamos la herramienta global de SonarScanner para .NET
+      - name: "Install SonarScanner for .NET"
+        run: dotnet tool install --global dotnet-sonarscanner
+
+      # Iniciamos el escáner ANTES del build
+      - name: "SonarQube Scan Begin"
+        if: env.SONAR_TOKEN != ''
+        run: >
+          dotnet sonarscanner begin 
+          /k:"FMAT-Restaurant_Payments-BE" 
+          /o:"fmat-restaurant" 
+          /d:sonar.token="${{ env.SONAR_TOKEN }}" 
+          /d:sonar.host.url="https://sonarcloud.io" 
+          /d:sonar.qualitygate.wait=true 
+          /d:sonar.cs.opencover.reportsPaths="**/coverage.opencover.xml"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: "build"
         run: dotnet build --no-restore --configuration Release
@@ -63,15 +85,10 @@ jobs:
       - name: "run tests"
         run: dotnet test --no-build --configuration Release --verbosity normal
 
-      - name: SonarQube Scan
+      # Finalizamos el escáner DESPUÉS del build y las pruebas
+      - name: "SonarQube Scan End"
         if: env.SONAR_TOKEN != ''
-        uses: SonarSource/sonarqube-scan-action@v8.2.2
-        with:
-          args: >
-            -Dsonar.organization=fmat-restaurant
-            -Dsonar.projectKey=FMAT-Restaurant_Payments-BE
-            -Dsonar.sources=PaymentsModule
-            -Dsonar.qualitygate.wait=true
+        run: dotnet sonarscanner end /d:sonar.token="${{ env.SONAR_TOKEN }}"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
