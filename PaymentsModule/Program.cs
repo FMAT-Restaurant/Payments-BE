@@ -37,6 +37,7 @@ builder.Services.AddScoped<CashShiftService>();
 builder.Services.AddScoped<TransactionDetailService>();
 builder.Services.AddScoped<IValidator<SalesHistoryQuery>, SalesHistoryQueryValidator>();
 builder.Services.AddScoped<SalesHistoryService>();
+builder.Services.AddScoped<PrintTicketService>();
 
 builder.Services.AddDbContext<PaymentsDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("SqlServer")));
@@ -56,8 +57,6 @@ builder.Services.AddMassTransit(x =>
         cfg.ConfigureEndpoints(context);
     });
 });
-
-builder.Services.AddScoped<PrintTicketService>();
 
 // Observability (from main's ServiceDefaults). Exports only when OTEL_EXPORTER_OTLP_ENDPOINT is set.
 builder.Logging.AddOpenTelemetry(logging =>

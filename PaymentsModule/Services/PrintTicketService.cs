@@ -11,7 +11,10 @@ public class PrintTicketService(PaymentsDbContext db)
     /// time, no calls to other services (PMC-14 AC2). Returns null when the folio does not exist.
     /// </summary>
     // Pure projection: EF selects only the needed columns and tracks nothing. Lines and payments keep the
-    // order they were charged in (sequential GUIDs), so repeated reprints are identical.
+    // order they were charged in: ChargeService never sets their ids, so EF Core generates sequential GUIDs
+    // that SQL Server sorts in insertion order, and repeated reprints are identical.
+    // Kept separate from TransactionDetailService (GET /api/v1/pagos/{folio}) on purpose: same history, but this
+    // is the printer's ESC/POS contract and evolves independently (see AGENTS.md, PMC-14).
     public Task<PrintTicketResponse?> GetAsync(string folio, CancellationToken ct = default) =>
         db.Transactions.AsNoTracking()
             .Where(t => t.Folio == folio)
