@@ -122,6 +122,41 @@ public class PrintTicketTests : IAsyncLifetime
         Assert.Contains(sale.Folio, documents[0]);
     }
 
+    // Order guarantee: lines and payments come back in the order they were charged (EF Core sequential GUIDs),
+    // with enough rows that an accidental order would not pass by chance.
+    [Fact]
+    public async Task Lines_and_payments_keep_the_order_they_were_charged_in()
+    {
+        var dishes = Enumerable.Range(1, 12).Select(n => $"Platillo {n:D2}").ToArray();
+        var methods = new[] { PaymentMethod.DebitCard, PaymentMethod.CreditCard, PaymentMethod.Cash };
+        var sale = await InsertSaleAsync(
+            DateTimeOffset.UtcNow,
+            TransactionStatus.Completed,
+            dishes.Select(d => new TransactionItem { DishName = d, Quantity = 1, UnitPrice = 10.00m, Amount = 10.00m }).ToList(),
+            methods.Select(m => new PaymentBreakdown { Method = m, Amount = 40.00m }).ToList());
+
+        var ticket = Assert.IsType<PrintTicketResponse>(Assert.IsType<OkObjectResult>(await GetAsync(sale.Folio)).Value);
+
+        Assert.Equal(dishes, ticket.Lines.Select(l => l.DishName));
+        Assert.Equal(methods, ticket.Footer.Payments.Select(p => p.Method));
+    }
+
+    // fecha_impresion is the sale date, not the moment of the query: reprints made at different times are identical.
+    [Fact]
+    public async Task Reprints_at_different_times_keep_the_sale_date()
+    {
+        var soldAt = new DateTimeOffset(2026, 9, 29, 18, 0, 0, TimeSpan.Zero);
+        var sale = await InsertSaleAsync(soldAt, TransactionStatus.Completed);
+
+        var first = Assert.IsType<PrintTicketResponse>(Assert.IsType<OkObjectResult>(await GetAsync(sale.Folio)).Value);
+        await Task.Delay(TimeSpan.FromSeconds(1.1));
+        var second = Assert.IsType<PrintTicketResponse>(Assert.IsType<OkObjectResult>(await GetAsync(sale.Folio)).Value);
+
+        Assert.Equal(soldAt, first.Header.PrintedAt);
+        Assert.Equal(soldAt, second.Header.PrintedAt);
+        Assert.Equal(JsonSerializer.Serialize(first), JsonSerializer.Serialize(second));
+    }
+
     [Fact]
     public void Endpoint_requires_an_authenticated_caller()
     {
@@ -140,7 +175,11 @@ public class PrintTicketTests : IAsyncLifetime
     }
 
     // A sale shaped like ChargeService persists it: items as plain text, electronic payments first.
-    private async Task<PaymentTransaction> InsertSaleAsync(DateTimeOffset soldAt, TransactionStatus status)
+    private async Task<PaymentTransaction> InsertSaleAsync(
+        DateTimeOffset soldAt,
+        TransactionStatus status,
+        List<TransactionItem>? items = null,
+        List<PaymentBreakdown>? payments = null)
     {
         await using var scope = _provider.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<PaymentsDbContext>();
@@ -162,16 +201,16 @@ public class PrintTicketTests : IAsyncLifetime
             Total = 722.36m,
             Status = status,
             CreatedAt = soldAt,
-            Items =
-            [
-                new TransactionItem { DishName = "Corte Ribeye", Quantity = 1, UnitPrice = 500.00m, Amount = 500.00m },
-                new TransactionItem { DishName = "Agua de horchata", Quantity = 2, UnitPrice = 35.50m, Amount = 71.00m }
-            ],
-            Payments =
-            [
-                new PaymentBreakdown { Method = PaymentMethod.CreditCard, Amount = 400.00m, AuthorizationReference = "AUTH-1" },
-                new PaymentBreakdown { Method = PaymentMethod.Cash, Amount = 322.36m }
-            ]
+            Items = items ?? new List<TransactionItem>
+            {
+                new() { DishName = "Corte Ribeye", Quantity = 1, UnitPrice = 500.00m, Amount = 500.00m },
+                new() { DishName = "Agua de horchata", Quantity = 2, UnitPrice = 35.50m, Amount = 71.00m }
+            },
+            Payments = payments ?? new List<PaymentBreakdown>
+            {
+                new() { Method = PaymentMethod.CreditCard, Amount = 400.00m, AuthorizationReference = "AUTH-1" },
+                new() { Method = PaymentMethod.Cash, Amount = 322.36m }
+            }
         };
         db.Transactions.Add(sale);
         await db.SaveChangesAsync();
