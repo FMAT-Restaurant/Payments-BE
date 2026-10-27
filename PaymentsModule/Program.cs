@@ -103,3 +103,6 @@ app.MapControllers();
 app.MapHealthChecks("/health");
 
 app.Run();
+
+// Lets the HTTP integration tests boot this app with WebApplicationFactory<Program>.
+public partial class Program;
