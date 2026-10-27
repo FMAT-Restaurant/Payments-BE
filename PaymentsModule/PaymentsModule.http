@@ -1,3 +1,29 @@
 @PaymentsModule_HostAddress = http://localhost:5150
+@Token = <JWT from the identity provider>
 
-###
+### Open cash shift (201 Created / 409 Conflict if already open)
+POST {{PaymentsModule_HostAddress}}/api/v1/cash-shifts/open
+Authorization: Bearer {{Token}}
+Content-Type: application/json
+
+{
+  "fondo_inicial": 500.00
+}
+
+### Close cash shift (200 OK / 422 Unprocessable Entity if no open shift)
+POST {{PaymentsModule_HostAddress}}/api/v1/cash-shifts/close
+Authorization: Bearer {{Token}}
+Content-Type: application/json
+
+{
+  "efectivo_declarado": 2500.00
+}
+
+### Ticket detail by folio
+GET {{PaymentsModule_HostAddress}}/api/v1/pagos/TX-20260901-000001
+Authorization: Bearer {{Token}}
+
+### Sales history (paged, filters are optional)
+GET {{PaymentsModule_HostAddress}}/api/v1/pagos?fecha_inicio=2026-09-01T00:00:00Z&fecha_fin=2026-09-30T23:59:59Z&estado=COMPLETADO&page_index=1&page_size=10
+Authorization: Bearer {{Token}}
+

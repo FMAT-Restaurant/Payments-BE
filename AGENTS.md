@@ -4,15 +4,21 @@
 
 `Payments-BE` is a .NET 10 microservice responsible for payment and billing processing (cobros y pagos) in the restaurant system.
 
-It serves as the backend intermediary API for the Frontend application repository.
+It serves as the backend service for the Frontend application repository, communicating via an API Gateway.
 
 ## Architecture: MVC sin Vista (Model-Controller Backend)
 
-The project follows an **MVC pattern without View**:
+The project follows an **MVC pattern without View**, where client requests from the Frontend are routed through an **API Gateway**:
 
 ```text
 +-----------------------+
 |  Frontend Repository  |  <--- The "View" (External Client)
++-----------------------+
+           |
+           | HTTP / JSON REST
+           v
++-----------------------+
+|      API Gateway      |  <--- Reverse Proxy / Routing
 +-----------------------+
            |
            | HTTP / JSON REST
@@ -47,7 +53,7 @@ The project follows an **MVC pattern without View**:
 
 ### 1. Controllers / Endpoints (The "C")
 
-The Controller/Endpoint layer is responsible for HTTP communication with the frontend:
+The Controller/Endpoint layer is responsible for HTTP communication routed via the API Gateway:
 
 - Exposing RESTful HTTP endpoints.
 - Parsing and validating HTTP request bodies and query parameters.
@@ -76,7 +82,7 @@ The Services layer contains the core business logic of the microservice:
 
 The Model layer represents data structures and domain representations:
 
-- **DTOs (Data Transfer Objects):** Define clean, stable contracts for input and output with the Frontend.
+- **DTOs (Data Transfer Objects):** Define clean, stable contracts for input and output with the Frontend (routed via the API Gateway).
 - **Entities / Domain Models:** Represent the state of payments, invoices, accounts, and transactions.
 - **Data Access:** Repositories or DbContext for persistence operations.
 
@@ -118,6 +124,22 @@ Agreed while implementing PMC-6. Several items are pending confirmation with the
 
 ---
 
+## Cash Shift Decisions (PMC-8)
+
+Agreed while implementing and reviewing PMC-8:
+
+- **Routes:** `POST /api/v1/cash-shifts/open` and `POST /api/v1/cash-shifts/close` follow the English `Code Language` convention (to be aligned with Frontend / API Gateway). Wire JSON property names keep the Spanish snake_case contract (`fondo_inicial`, `efectivo_declarado`, `turno_caja_id`, `estado`, `diferencia`, `mensaje`).
+- **Required decimal fields:** `InitialFund` and `DeclaredCash` are `decimal?` on the request DTOs and validated with `.NotNull().GreaterThanOrEqualTo(0m).PrecisionScale(18, 2, true)` so an empty payload `{}` is rejected with `400 Bad Request` instead of defaulting to `0.00`.
+- **Open shift concurrency:** a filtered unique index `IX_CashShifts_CashierId` (`WHERE [Status] = 'Open'`) plus a prior check guarantees at most one open shift per cashier; concurrent duplicates return `409 Conflict` (`RowVersion` only protects existing rows on `UPDATE`, whereas the filtered unique index prevents concurrent duplicate `INSERT`s).
+- **Close vs. charge concurrency:** both `ChargeService.ChargeAsync` and `CashShiftService.CloseAsync` acquire a row lock on the open `CashShift` (`WITH (UPDLOCK, ROWLOCK, INDEX(IX_CashShifts_CashierId))` and literal `Status = 'Open'`) inside their `ReadCommitted` transaction before reading or inserting `Transactions`. The index hint and `'Open'` literal ensure an index seek that locks only that cashier's open shift without blocking other cashiers. `RowVersion` remains as the optimistic concurrency token on `CashShift`.
+- **Tips in shift reconciliation:** tips are accumulated in `TipsTotal` and excluded from `ExpectedCash` and `CardTotal` so they are never double-counted and cash tips taken by the waiter do not unbalance the drawer (`netCardSale = min(cardPaid, total - tip)`, `netCashSale = (total - tip) - netCardSale`, `ExpectedCash = InitialFund + sum(netCashSale)`). Pending confirmation with the story owner, including whether card tips are paid out to waiters in cash from the drawer (which would subtract card tips from `ExpectedCash`) or settled separately.
+- **Identity & validation conventions:** cashier identity is read via `User.FindFirstValue(ClaimTypes.NameIdentifier)` in the controller rather than injecting `IHttpContextAccessor` into services (keeping Services decoupled from `HttpContext`), and validator classes use English names (`OpenCashShiftRequestValidator`, `CloseCashShiftRequestValidator`).
+- **Reconciliation difference & messages:** `Difference = DeclaredCash - ExpectedCash` (negative on shortage, positive on surplus, `0.00` on exact match). Exact match transitions status to `Closed` (`CERRADO`, `"Corte exacto. Turno cerrado."`); non-zero transitions to `Unbalanced` (`DESCUADRADO`, `"Corte con faltante. Turno cerrado con descuadre."` or `"Corte con sobrante. Turno cerrado con descuadre."`).
+- **Closing without open shift:** returns `422 Unprocessable Entity` (`ProblemDetails`), matching `ChargeService` when no open shift exists.
+- **Persisted summary:** `CashShift` stores `DeclaredCash`, `ExpectedCash`, `CardTotal`, `TipsTotal`, and `Difference` in the database while the close response returns the 4 contract fields.
+
+---
+
 ## Print Ticket Decisions (PMC-14)
 
 Confirmed with the story owner (Edwing) while implementing PMC-14:
@@ -126,7 +148,9 @@ Confirmed with the story owner (Edwing) while implementing PMC-14:
 - **`fecha_impresion`:** the sale date (`PaymentTransaction.CreatedAt`), not the time of each reprint, so every reprint is identical to the original.
 - **Footer:** `subtotal`, `impuestos`, `propina`, `total`, `pagos` and `estado` (subtotal, taxes and tip were added to the story's example).
 - **Folio:** the format generated by PMC-6 (`TX-{yyyyMMdd}-{number:D6}`); the story's `TX-10500` is only illustrative.
-- **Query:** pure EF projection with `AsNoTracking()` (no `Include().ToList()`), reading only the plain-text history persisted at charge time. Lines and payments are ordered by their sequential ids (charge order) so repeated reprints are identical. No HTTP caching for now, since a later cancellation (PMC-12) changes `estado`.
+- **Query:** pure EF projection with `AsNoTracking()` (no `Include().ToList()`), reading only the plain-text history persisted at charge time. No HTTP caching for now, since a later cancellation (PMC-12) changes `estado`.
+- **Line and payment order:** `cuerpo` and `pie.pagos` are ordered by `TransactionItem.Id` / `PaymentBreakdown.Id`. `ChargeService` never assigns those ids, so EF Core's SQL Server provider generates them client-side with its sequential GUID generator, in the order the entities are added; that generator is built to sort the same way SQL Server compares `uniqueidentifier`, so `ORDER BY Id` returns the charge order. This is the official ordering mechanism: if any code starts assigning these ids itself (e.g. `Guid.NewGuid()`), add an explicit `Sequence` column set at charge time and order by it instead. Covered by `Lines_and_payments_keep_the_order_they_were_charged_in`.
+- **Coexistence with PMC-11:** `GET /api/v1/pagos/{folio}` (`TransactionDetailService`) is the general transaction detail; `GET /api/v1/pagos/{folio}/ticket-impresion` (`PrintTicketService`) is a contract specialised for the ESC/POS printer. Both read the same persisted history, but the queries stay separate on purpose: each projects only the columns its own DTO needs and the two contracts evolve for different consumers (Frontend vs. printer). Neither endpoint calls the catalogue, orders or any other microservice. PMC-14 does not change the PMC-11 contract.
 - **Tests:** `PrintTicketTests` run against the same SQL Server test database.
 
 ---
@@ -137,7 +161,7 @@ Confirmed with the story owner (Edwing) while implementing PMC-14:
 - **Code Language:** All code is written in English: identifiers, types, methods, variables, test names, log messages, comments, and cache keys. No Spanish and no Spanglish. When a wire contract with another service uses Spanish field names, keep the English property and map the name with `[JsonPropertyName]`.
 - **Commit Messages:** Must follow the [Conventional Commits](https://www.conventionalcommits.org/) specification (`feat:`, `fix:`, `chore:`, `refactor:`, `test:`, `docs:`).
 - **Scope Discipline:** Do not perform unrelated refactoring or edit files outside the requested scope.
-- **Frontend Compatibility:** Maintain backward compatibility for API contracts consumed by the Frontend repository unless breaking changes are explicitly requested.
+- **Frontend Compatibility:** Maintain backward compatibility for API contracts consumed by the Frontend repository (via the API Gateway) unless breaking changes are explicitly requested.
 
 ---
 

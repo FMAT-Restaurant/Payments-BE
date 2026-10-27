@@ -46,7 +46,7 @@ Do not plan:
 
 ## MVC (without View) Architecture Rules
 
-`Payments-BE` functions as an API microservice and intermediary backend for the Frontend application (MVC without View).
+`Payments-BE` functions as an API microservice and backend service for the Frontend application, communicating via an API Gateway (MVC without View).
 
 Before planning a change, determine which component owns the responsibility:
 
@@ -56,7 +56,7 @@ Before planning a change, determine which component owns the responsibility:
 - **Services / Business Logic**:
   - Responsible for payment rules, transaction state changes, validation, calculations, external gateway integrations, and orchestration.
 - **Models / DTOs (The "M")**:
-  - Responsible for domain data representation, database entities, and request/response DTOs exchanged with the frontend.
+  - Responsible for domain data representation, database entities, and request/response DTOs exchanged with the frontend (routed via the API Gateway).
 
 Do not place heavy business logic directly in Controllers.
 Do not couple business logic with HTTP-specific constructs.
