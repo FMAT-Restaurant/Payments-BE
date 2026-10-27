@@ -65,7 +65,7 @@ jobs:
       - name: "Install SonarScanner for .NET"
         run: dotnet tool install --global dotnet-sonarscanner
 
-      # Iniciamos el escáner ANTES del build
+      # Iniciamos el escáner ANTES del build, indicando dónde estarán los reportes de pruebas
       - name: "SonarQube Scan Begin"
         if: env.SONAR_TOKEN != ''
         run: >
@@ -75,6 +75,7 @@ jobs:
           /d:sonar.token="${{ env.SONAR_TOKEN }}" 
           /d:sonar.host.url="https://sonarcloud.io" 
           /d:sonar.qualitygate.wait=true 
+          /d:sonar.cs.vstest.reportsPaths="**/TestResults/*.trx"
           /d:sonar.cs.opencover.reportsPaths="**/coverage.opencover.xml"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -82,8 +83,9 @@ jobs:
       - name: "build"
         run: dotnet build --no-restore --configuration Release
 
+      # Ejecutamos las pruebas generando los reportes TRX y de Cobertura en formato OpenCover
       - name: "run tests"
-        run: dotnet test --no-build --configuration Release --verbosity normal
+        run: dotnet test --no-build --configuration Release --verbosity normal --logger trx --collect:"XPlat Code Coverage" -- DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=opencover
 
       # Finalizamos el escáner DESPUÉS del build y las pruebas
       - name: "SonarQube Scan End"
