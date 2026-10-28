@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
+using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.Extensions.DependencyInjection;
@@ -31,10 +32,14 @@ namespace PaymentsModule.Tests;
 /// </summary>
 public sealed class PaymentsApiFactory : WebApplicationFactory<Program>
 {
-    private static readonly string ConnectionString =
-        (Environment.GetEnvironmentVariable("ConnectionStrings__SqlServer")
+    // The catalog is always set explicitly: whatever shape the base connection string has (Database= or Initial
+    // Catalog=, with or without a trailing ';'), EnsureDeletedAsync can only ever drop payments_tests_http.
+    private static readonly string ConnectionString = new SqlConnectionStringBuilder(
+        Environment.GetEnvironmentVariable("ConnectionStrings__SqlServer")
         ?? "Server=localhost,14330;Database=payments_tests;User Id=sa;Password=Payments_Dev_2026!;TrustServerCertificate=True")
-        .Replace("Database=payments_tests;", "Database=payments_tests_http;", StringComparison.Ordinal);
+    {
+        InitialCatalog = "payments_tests_http"
+    }.ConnectionString;
 
     private static readonly SemaphoreSlim MigrateOnce = new(1, 1);
     private static bool _migrated;
