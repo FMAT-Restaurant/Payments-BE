@@ -230,12 +230,32 @@ public class SalesExportTests : IAsyncLifetime
         Assert.DoesNotContain(uncommitted.Folio, export.Body);
     }
 
+    // The Gateway only issues "Administrador" and cashier roles; there is no accountant role, so only admins export.
     [Fact]
-    public void Endpoint_is_restricted_to_accountants_and_administrators()
+    public void Endpoint_is_restricted_to_administrators()
     {
         var attribute = typeof(SalesExportController).GetCustomAttribute<AuthorizeAttribute>();
 
-        Assert.Equal("Contador,Administrador", attribute?.Roles);
+        Assert.Equal("Administrador", attribute?.Roles);
+    }
+
+    // Review P1: the export window is served by IX_Transactions_CreatedAt_Number instead of scanning Transactions.
+    [Fact]
+    public async Task Transactions_have_an_index_on_the_sale_date_for_the_export()
+    {
+        await using var scope = _provider.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<PaymentsDbContext>();
+
+        var columns = await db.Database.SqlQuery<string>($"""
+            SELECT c.name AS Value
+            FROM sys.indexes i
+            JOIN sys.index_columns ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id
+            JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
+            WHERE i.object_id = OBJECT_ID('Transactions') AND i.name = 'IX_Transactions_CreatedAt_Number'
+            ORDER BY ic.key_ordinal
+            """).ToListAsync();
+
+        Assert.Equal(new[] { "CreatedAt", "Number" }, columns);
     }
 
     private async Task<Export> ExportAsync(

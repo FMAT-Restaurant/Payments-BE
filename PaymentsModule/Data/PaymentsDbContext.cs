@@ -41,6 +41,8 @@ public class PaymentsDbContext(DbContextOptions<PaymentsDbContext> options) : Db
             e.HasIndex(t => t.Number).IsUnique();
             // Idempotency guard: a session can be charged once, even under concurrent retries.
             e.HasIndex(t => t.DinningSessionId).IsUnique();
+            // Accounting export (PMC-15): seek on the sale-date window, ordered like the query (CreatedAt, Number).
+            e.HasIndex(t => new { t.CreatedAt, t.Number });
             e.HasOne<CashShift>().WithMany().HasForeignKey(t => t.CashShiftId).OnDelete(DeleteBehavior.Restrict);
             e.HasMany(t => t.Items).WithOne().HasForeignKey(i => i.TransactionId);
             e.HasMany(t => t.Payments).WithOne().HasForeignKey(p => p.TransactionId);

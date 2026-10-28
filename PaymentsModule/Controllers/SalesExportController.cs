@@ -7,7 +7,7 @@ using PaymentsModule.Services;
 namespace PaymentsModule.Controllers;
 
 [ApiController]
-[Authorize(Roles = "Contador,Administrador")]
+[Authorize(Roles = "Administrador")]
 [Route("api/v1/pagos")]
 public class SalesExportController(
     SalesExportService exports,
