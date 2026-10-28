@@ -30,6 +30,7 @@ builder.Services.AddStackExchangeRedisCache(options =>
 builder.Services.AddScoped<IValidator<DinningSessionReadyEvent>, DinningSessionReadyEventValidator>();
 builder.Services.AddScoped<PendingBillService>();
 builder.Services.AddScoped<IValidator<ChargeRequest>, ChargeRequestValidator>();
+builder.Services.AddPaymentGateway(builder.Configuration);
 builder.Services.AddScoped<ChargeService>();
 builder.Services.AddScoped<IValidator<OpenCashShiftRequest>, OpenCashShiftRequestValidator>();
 builder.Services.AddScoped<IValidator<CloseCashShiftRequest>, CloseCashShiftRequestValidator>();
