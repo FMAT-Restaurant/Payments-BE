@@ -1,11 +1,7 @@
-using System.Data.Common;
-using System.Reflection;
 using System.Text.Json;
-using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using PaymentsModule.Controllers;
 using PaymentsModule.Data;
@@ -24,7 +20,7 @@ public class PrintTicketTests : IAsyncLifetime
     // Far from the values the folio sequence hands out to the charge tests.
     private static long _numbers = 8_000_000_000;
 
-    private readonly FailOnQuery _failure = new();
+    private readonly FailingQueries _failure = new();
     private readonly ServiceProvider _provider;
 
     public PrintTicketTests()
@@ -95,6 +91,7 @@ public class PrintTicketTests : IAsyncLifetime
         var notFound = Assert.IsType<NotFoundObjectResult>(result);
         var problem = Assert.IsType<ProblemDetails>(notFound.Value);
         Assert.Equal(StatusCodes.Status404NotFound, problem.Status);
+        Assert.Equal("The ticket 'TX-00000000-000000' does not exist.", problem.Detail);
     }
 
     // Scenario 3, service side: the exception propagates out of the controller untouched. The 500 answered by
@@ -103,9 +100,9 @@ public class PrintTicketTests : IAsyncLifetime
     public async Task Database_timeout_aborts_the_ticket_and_propagates_to_the_exception_handler()
     {
         var sale = await InsertSaleAsync(DateTimeOffset.UtcNow, TransactionStatus.Completed);
-        _failure.Enabled = true;
+        _failure.FailQueriesWith(sale.Folio);
 
-        await Assert.ThrowsAsync<SimulatedTimeout>(() => GetAsync(sale.Folio));
+        await Assert.ThrowsAsync<SimulatedDatabaseTimeout>(() => GetAsync(sale.Folio));
     }
 
     // Scenario 4: five simultaneous reprints get exactly the same document.
@@ -156,13 +153,6 @@ public class PrintTicketTests : IAsyncLifetime
         Assert.Equal(soldAt, first.Header.PrintedAt);
         Assert.Equal(soldAt, second.Header.PrintedAt);
         Assert.Equal(JsonSerializer.Serialize(first), JsonSerializer.Serialize(second));
-    }
-
-    // The real 401 for a request without token is asserted over HTTP in PrintTicketHttpTests.
-    [Fact]
-    public void Endpoint_requires_an_authenticated_caller()
-    {
-        Assert.NotNull(typeof(PrintTicketController).GetCustomAttribute<AuthorizeAttribute>());
     }
 
     private async Task<IActionResult> GetAsync(string folio)
@@ -227,17 +217,5 @@ public class PrintTicketTests : IAsyncLifetime
         db.Transactions.Add(sale);
         await db.SaveChangesAsync();
         return sale;
-    }
-
-    private sealed class SimulatedTimeout() : DbException("Simulated SQL Server timeout.");
-
-    // Simulates a SQL Server timeout while the ticket query runs (PMC-14 scenario 3).
-    private sealed class FailOnQuery : DbCommandInterceptor
-    {
-        public bool Enabled { get; set; }
-
-        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
-            DbCommand command, CommandEventData eventData, InterceptionResult<DbDataReader> result, CancellationToken cancellationToken = default) =>
-            Enabled ? throw new SimulatedTimeout() : base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
     }
 }

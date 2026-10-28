@@ -25,7 +25,7 @@ public class PrintTicketController(PrintTicketService tickets) : ControllerBase
             return NotFound(new ProblemDetails
             {
                 Status = StatusCodes.Status404NotFound,
-                Detail = $"No existe una venta con el folio '{folio}'."
+                Detail = $"The ticket '{folio}' does not exist."
             });
         }
 
