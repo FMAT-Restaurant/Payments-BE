@@ -95,6 +95,26 @@ public class SalesExportTests : IAsyncLifetime
         Assert.DoesNotContain(outside, export.Body);
     }
 
+    // Tarjetas = CreditCard + DebitCard (review P1): a sale paid with both cards and no cash.
+    [Fact]
+    public async Task Cards_column_sums_credit_and_debit_of_the_same_sale()
+    {
+        var start = NextWindow();
+        var shift = await NewShiftAsync();
+        var folio = await InsertSaleAsync(shift, start.AddHours(9), 150m, 24m, 6m, TransactionStatus.Completed,
+            (PaymentMethod.CreditCard, 100m), (PaymentMethod.DebitCard, 80m));
+
+        var export = await ExportAsync(start, start.AddDays(1));
+
+        Assert.Equal(
+            new[]
+            {
+                "Folio,Fecha,Estado,Subtotal,Impuestos,Propina,Total,Efectivo,Tarjetas",
+                $"{folio},{start:yyyy-MM-dd}T09:00:00Z,COMPLETADO,150.00,24.00,6.00,180.00,0.00,180.00"
+            },
+            Lines(export.Body));
+    }
+
     [Fact]
     public async Task Export_of_an_empty_window_returns_only_the_header()
     {

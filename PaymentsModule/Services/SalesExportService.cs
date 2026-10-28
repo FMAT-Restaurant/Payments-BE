@@ -22,7 +22,8 @@ public class SalesExportService(PaymentsDbContext db)
 
     /// <summary>
     /// Deferred query over the sales whose sale date falls in [start, end], cancelled ones included.
-    /// Cash and cards are summed from <see cref="PaymentBreakdown"/> in SQL. Nothing is materialized:
+    /// Cash and cards are summed from <see cref="PaymentBreakdown"/> in SQL. Tarjetas names CreditCard and DebitCard
+    /// explicitly, so a payment method added later never lands in it by accident. Nothing is materialized:
     /// the caller pulls one row at a time from the data reader (PMC-15 AC3).
     /// </summary>
     public IAsyncEnumerable<SalesExportRow> StreamRows(DateTimeOffset start, DateTimeOffset end) =>
@@ -38,7 +39,9 @@ public class SalesExportService(PaymentsDbContext db)
                 t.Tip,
                 t.Total,
                 t.Payments.Where(p => p.Method == PaymentMethod.Cash).Sum(p => p.Amount),
-                t.Payments.Where(p => p.Method != PaymentMethod.Cash).Sum(p => p.Amount)))
+                t.Payments
+                    .Where(p => p.Method == PaymentMethod.CreditCard || p.Method == PaymentMethod.DebitCard)
+                    .Sum(p => p.Amount)))
             .AsAsyncEnumerable();
 
     /// <summary>
