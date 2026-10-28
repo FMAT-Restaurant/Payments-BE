@@ -81,7 +81,7 @@ public class SalesExportTests : IAsyncLifetime
         Assert.Equal(StatusCodes.Status200OK, export.Http.Response.StatusCode);
         Assert.Equal("text/csv; charset=utf-8", export.Http.Response.ContentType);
         Assert.Equal(
-            $"attachment; filename=\"reporte_ventas_{start:yyyyMMdd}_{start.AddDays(30):yyyyMMdd}.csv\"",
+            $"attachment; filename=\"reporte_ventas_{start:yyyyMMdd}_{start.AddDays(29):yyyyMMdd}.csv\"",
             export.Http.Response.Headers.ContentDisposition.ToString());
         Assert.Equal(
             new[]
@@ -113,6 +113,31 @@ public class SalesExportTests : IAsyncLifetime
                 $"{folio},{start:yyyy-MM-dd}T09:00:00Z,COMPLETADO,150.00,24.00,6.00,180.00,0.00,180.00"
             },
             Lines(export.Body));
+    }
+
+    // The end is exclusive (agreed with Edwing): a sale a fraction of a second before `fin` belongs to this report,
+    // a sale exactly at `fin` belongs to the next one, so consecutive reports never lose or repeat a sale.
+    [Fact]
+    public async Task Fin_is_exclusive_so_consecutive_reports_neither_lose_nor_repeat_a_sale()
+    {
+        var start = NextWindow();
+        var boundary = start.AddDays(1);
+        var shift = await NewShiftAsync();
+        var lastMoment = await InsertSaleAsync(shift, boundary.AddMilliseconds(-600), 10m, 0m, 0m,
+            TransactionStatus.Completed, (PaymentMethod.Cash, 10m));
+        var atBoundary = await InsertSaleAsync(shift, boundary, 20m, 0m, 0m, TransactionStatus.Completed,
+            (PaymentMethod.Cash, 20m));
+
+        var first = await ExportAsync(start, boundary);
+        var second = await ExportAsync(boundary, boundary.AddDays(1));
+
+        Assert.Contains(lastMoment, first.Body);
+        Assert.DoesNotContain(atBoundary, first.Body);
+        Assert.Contains(atBoundary, second.Body);
+        Assert.DoesNotContain(lastMoment, second.Body);
+        Assert.Equal(
+            $"attachment; filename=\"reporte_ventas_{start:yyyyMMdd}_{start:yyyyMMdd}.csv\"",
+            first.Http.Response.Headers.ContentDisposition.ToString());
     }
 
     [Fact]

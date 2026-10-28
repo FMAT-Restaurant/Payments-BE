@@ -21,14 +21,16 @@ public class SalesExportService(PaymentsDbContext db)
     private static readonly UTF8Encoding Utf8NoBom = new(encoderShouldEmitUTF8Identifier: false);
 
     /// <summary>
-    /// Deferred query over the sales whose sale date falls in [start, end], cancelled ones included.
+    /// Deferred query over the sales whose sale date falls in [start, end), cancelled ones included. The end is
+    /// exclusive: CreatedAt keeps fractions of a second, so a month is exported as [1st 00:00, next 1st 00:00) and a
+    /// sale at 23:59:59.400 on the last day can never fall between two consecutive reports.
     /// Cash and cards are summed from <see cref="PaymentBreakdown"/> in SQL. Tarjetas names CreditCard and DebitCard
     /// explicitly, so a payment method added later never lands in it by accident. Nothing is materialized:
     /// the caller pulls one row at a time from the data reader (PMC-15 AC3).
     /// </summary>
     public IAsyncEnumerable<SalesExportRow> StreamRows(DateTimeOffset start, DateTimeOffset end) =>
         db.Transactions.AsNoTracking()
-            .Where(t => t.CreatedAt >= start && t.CreatedAt <= end)
+            .Where(t => t.CreatedAt >= start && t.CreatedAt < end)
             .OrderBy(t => t.CreatedAt).ThenBy(t => t.Number)
             .Select(t => new SalesExportRow(
                 t.Folio,
@@ -97,8 +99,15 @@ public class SalesExportService(PaymentsDbContext db)
         return count;
     }
 
-    public static string FileName(DateTimeOffset start, DateTimeOffset end) =>
-        $"reporte_ventas_{start.UtcDateTime:yyyyMMdd}_{end.UtcDateTime:yyyyMMdd}.csv";
+    /// <summary>
+    /// Names the file after the last day actually covered: the end is exclusive, so [2026-09-01, 2026-10-01) is
+    /// "reporte_ventas_20260901_20260930.csv", as in the story.
+    /// </summary>
+    public static string FileName(DateTimeOffset start, DateTimeOffset end)
+    {
+        var lastCovered = end > start ? end.AddTicks(-1) : end;
+        return $"reporte_ventas_{start.UtcDateTime:yyyyMMdd}_{lastCovered.UtcDateTime:yyyyMMdd}.csv";
+    }
 
     // Same labels as the JSON contract (JsonStringEnumMemberName on TransactionStatus).
     private static string StatusLabel(TransactionStatus status) => status switch
