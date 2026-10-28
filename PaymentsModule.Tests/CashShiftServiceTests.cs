@@ -35,6 +35,7 @@ public class CashShiftServiceTests : IAsyncLifetime
             .AddLogging()
             .AddDistributedMemoryCache()
             .AddDbContext<PaymentsDbContext>(o => o.UseSqlServer(ConnectionString).AddInterceptors(_failure, _queryFailure, _beforeInsert))
+            .AddSingleton<IPaymentGateway>(new FakePaymentGateway())
             .AddScoped<PendingBillService>()
             .AddScoped<ChargeService>()
             .AddScoped<CashShiftService>()

@@ -27,6 +27,7 @@ public class ChargeServiceTests : IAsyncLifetime
     private static bool _migrated;
 
     private readonly FailOnBreakdownInsert _failure = new();
+    private readonly FakePaymentGateway _gateway = new();
     private readonly ServiceProvider _provider;
 
     public ChargeServiceTests()
@@ -35,6 +36,7 @@ public class ChargeServiceTests : IAsyncLifetime
             .AddLogging()
             .AddDistributedMemoryCache()
             .AddDbContext<PaymentsDbContext>(o => o.UseSqlServer(ConnectionString).AddInterceptors(_failure))
+            .AddSingleton<IPaymentGateway>(_gateway)
             .AddScoped<PendingBillService>()
             .AddScoped<ChargeService>()
             .AddScoped<IValidator<ChargeRequest>, ChargeRequestValidator>()
@@ -197,6 +199,102 @@ public class ChargeServiceTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Card_payment_is_charged_in_the_gateway_for_the_amount_applied()
+    {
+        var (session, cashier) = await ArrangeAsync(billTotal: 250m);
+
+        var result = await ChargeAsync(RequestWith(session, Cash(100m), new PaymentRequest(PaymentMethod.CreditCard, 150m, "AUTH-1")), cashier);
+
+        Assert.Equal(ChargeOutcome.Completed, result.Outcome);
+        var charge = Assert.Single(_gateway.Charged);
+        Assert.Equal((session, "AUTH-1", 150m), (charge.DinningSessionId, charge.AuthorizationReference, charge.Amount));
+        Assert.Empty(_gateway.Reversed);
+        Assert.Equal(2, (await FindAsync(session))!.Payments.Count);
+    }
+
+    [Fact]
+    public async Task Declined_card_rejects_the_charge_and_reverses_the_cards_already_approved()
+    {
+        var (session, cashier) = await ArrangeAsync(billTotal: 250m);
+        _gateway.Decline("AUTH-B");
+
+        var result = await ChargeAsync(
+            RequestWith(session, new PaymentRequest(PaymentMethod.CreditCard, 100m, "AUTH-A"), new PaymentRequest(PaymentMethod.DebitCard, 150m, "AUTH-B")),
+            cashier);
+
+        Assert.Equal(ChargeOutcome.CardDeclined, result.Outcome);
+        Assert.Equal("AUTH-A", Assert.Single(_gateway.Reversed).AuthorizationReference);
+        Assert.Null(await FindAsync(session));
+        Assert.Equal(0, await OutboxCountAsync(session));
+    }
+
+    [Fact]
+    public async Task Gateway_outage_returns_unavailable_and_reverses_the_charge_in_doubt()
+    {
+        var (session, cashier) = await ArrangeAsync(billTotal: 250m);
+        _gateway.Unavailable = true;
+
+        var result = await ChargeAsync(Request(session, new PaymentRequest(PaymentMethod.CreditCard, 250m, "AUTH-1")), cashier);
+
+        Assert.Equal(ChargeOutcome.GatewayUnavailable, result.Outcome);
+        Assert.Equal("AUTH-1", Assert.Single(_gateway.Reversed).AuthorizationReference);
+        Assert.Null(await FindAsync(session));
+    }
+
+    [Fact]
+    public async Task Database_failure_reverses_the_cards_charged_in_the_gateway()
+    {
+        var (session, cashier) = await ArrangeAsync(billTotal: 250m);
+        _failure.Enabled = true;
+
+        await Assert.ThrowsAsync<DbUpdateException>(
+            () => ChargeAsync(Request(session, new PaymentRequest(PaymentMethod.CreditCard, 250m, "AUTH-1")), cashier));
+
+        _failure.Enabled = false;
+        Assert.Equal("AUTH-1", Assert.Single(_gateway.Reversed).AuthorizationReference);
+        Assert.Null(await FindAsync(session));
+        Assert.Equal(0, await OutboxCountAsync(session));
+    }
+
+    [Fact]
+    public async Task Cash_only_and_duplicate_requests_never_reach_the_gateway()
+    {
+        var (session, cashier) = await ArrangeAsync(billTotal: 250m);
+        await ChargeAsync(Request(session, Cash(250m)), cashier);
+
+        var retry = await ChargeAsync(Request(session, new PaymentRequest(PaymentMethod.CreditCard, 250m, "AUTH-1")), cashier);
+
+        Assert.Equal(ChargeOutcome.AlreadyPaid, retry.Outcome);
+        Assert.Empty(_gateway.Charged);
+    }
+
+    [Fact]
+    public async Task Controller_maps_gateway_outcomes_to_422_and_503()
+    {
+        var (session, cashier) = await ArrangeAsync(billTotal: 250m);
+        var card = new PaymentRequest(PaymentMethod.CreditCard, 250m, "AUTH-1");
+
+        _gateway.Decline("AUTH-1");
+        var declined = await ControllerChargeAsync(Request(session, card), cashier);
+        _gateway.Unavailable = true;
+        var unavailable = await ControllerChargeAsync(Request(session, card), cashier);
+
+        Assert.Equal(StatusCodes.Status422UnprocessableEntity, declined.StatusCode);
+        Assert.Equal(StatusCodes.Status503ServiceUnavailable, unavailable.StatusCode);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public void Card_payments_require_an_authorization_reference(string? reference)
+    {
+        var validator = new ChargeRequestValidator();
+
+        Assert.False(validator.Validate(Request(Guid.NewGuid(), new PaymentRequest(PaymentMethod.CreditCard, 100m, reference))).IsValid);
+        Assert.True(validator.Validate(Request(Guid.NewGuid(), Cash(100m))).IsValid);
+    }
+
+    [Fact]
     public async Task Rejects_cashier_without_open_shift()
     {
         var (session, _) = await ArrangeAsync(billTotal: 250m);
@@ -337,6 +435,9 @@ public class ChargeServiceTests : IAsyncLifetime
 
     private static ChargeRequest Request(Guid session, PaymentRequest payment) =>
         new(session, 0m, [payment], [new ItemSnapshot("Tacos al Pastor", 2, 125m, 250m)]);
+
+    private static ChargeRequest RequestWith(Guid session, params PaymentRequest[] payments) =>
+        new(session, 0m, payments, [new ItemSnapshot("Tacos al Pastor", 2, 125m, 250m)]);
 
     private static PaymentRequest Cash(decimal amount) => new(PaymentMethod.Cash, amount, null);
 
