@@ -15,6 +15,34 @@ public class CashShiftsController(
     IValidator<OpenCashShiftRequest> openValidator,
     IValidator<CloseCashShiftRequest> closeValidator) : ControllerBase
 {
+    [HttpGet("summary")]
+    [ProducesResponseType<CashShiftSummaryResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType<ProblemDetails>(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetSummary(CancellationToken ct)
+    {
+        // Cashier identity comes only from the JWT forwarded by the API Gateway (RNF-04).
+        var cashierId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (string.IsNullOrEmpty(cashierId))
+        {
+            return Unauthorized();
+        }
+
+        var result = await shifts.GetSummaryAsync(cashierId, ct);
+        if (result.Outcome == ShiftSummaryOutcome.Found)
+        {
+            return Ok(result.Response);
+        }
+
+        var problem = new ProblemDetails
+        {
+            Status = StatusCodes.Status404NotFound,
+            Detail = result.Error
+        };
+
+        return new ObjectResult(problem) { StatusCode = problem.Status };
+    }
+
     [HttpPost("open")]
     [ProducesResponseType<OpenCashShiftResponse>(StatusCodes.Status201Created)]
     [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]
