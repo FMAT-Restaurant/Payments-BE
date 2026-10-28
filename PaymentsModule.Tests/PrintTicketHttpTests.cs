@@ -8,11 +8,7 @@ namespace PaymentsModule.Tests;
 // PMC-14 through the real HTTP pipeline: authentication, UseExceptionHandler and MVC's JSON serializer included.
 public class PrintTicketHttpTests(PaymentsApiFactory api) : IClassFixture<PaymentsApiFactory>, IAsyncLifetime
 {
-    public async Task InitializeAsync()
-    {
-        await using var scope = api.Services.CreateAsyncScope();
-        await ChargeServiceTests.EnsureMigratedAsync(scope.ServiceProvider.GetRequiredService<PaymentsDbContext>());
-    }
+    public Task InitializeAsync() => PaymentsApiFactory.EnsureDatabaseAsync();
 
     public Task DisposeAsync() => Task.CompletedTask;
 

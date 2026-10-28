@@ -22,18 +22,49 @@ namespace PaymentsModule.Tests;
 /// <list type="bullet">
 /// <item>Authentication: the API Gateway JWT becomes <see cref="TestAuthHandler"/> (header based).</item>
 /// <item>MassTransit: RabbitMQ becomes MassTransit's in-memory test harness.</item>
-/// <item>Database: the SQL Server test database, with <see cref="Failures"/> to simulate timeouts.</item>
+/// <item>Database: a SQL Server test database of its own (<c>payments_tests_http</c>), with <see cref="Failures"/>
+/// to simulate timeouts. Its own database matters: the app runs hosted services (e.g. MassTransit's outbox
+/// delivery) that must never touch the database other suites are using at the same time.</item>
 /// </list>
 /// Runs against a real SQL Server: `docker compose up -d sqlserver` locally, a service container in CI.
+/// Test classes call <see cref="EnsureDatabaseAsync"/> in <c>InitializeAsync</c>, before the first request.
 /// </summary>
 public sealed class PaymentsApiFactory : WebApplicationFactory<Program>
 {
     private static readonly string ConnectionString =
-        Environment.GetEnvironmentVariable("ConnectionStrings__SqlServer")
-        ?? "Server=localhost,14330;Database=payments_tests;User Id=sa;Password=Payments_Dev_2026!;TrustServerCertificate=True";
+        (Environment.GetEnvironmentVariable("ConnectionStrings__SqlServer")
+        ?? "Server=localhost,14330;Database=payments_tests;User Id=sa;Password=Payments_Dev_2026!;TrustServerCertificate=True")
+        .Replace("Database=payments_tests;", "Database=payments_tests_http;", StringComparison.Ordinal);
+
+    private static readonly SemaphoreSlim MigrateOnce = new(1, 1);
+    private static bool _migrated;
 
     /// <summary>Makes queries fail like a SQL Server timeout for chosen parameter values (e.g. a folio).</summary>
     public FailingQueries Failures { get; } = new();
+
+    /// <summary>
+    /// Recreates and migrates this suite's database once per test run. Uses its own context, so call it before the
+    /// first request and the app (with its hosted services) never starts against a missing schema.
+    /// </summary>
+    public static async Task EnsureDatabaseAsync()
+    {
+        await MigrateOnce.WaitAsync();
+        try
+        {
+            if (!_migrated)
+            {
+                await using var db = new PaymentsDbContext(
+                    new DbContextOptionsBuilder<PaymentsDbContext>().UseSqlServer(ConnectionString).Options);
+                await db.Database.EnsureDeletedAsync();
+                await db.Database.MigrateAsync();
+                _migrated = true;
+            }
+        }
+        finally
+        {
+            MigrateOnce.Release();
+        }
+    }
 
     /// <summary>A caller without credentials, as if the request arrived with no JWT.</summary>
     public HttpClient CreateAnonymousClient() => CreateClient(HttpsClientOptions());
