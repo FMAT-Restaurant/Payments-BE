@@ -2,10 +2,10 @@ name: CI/CD Pipeline
 
 on:
   push:
-    branches: ["main"]
+    branches: ["main", "qa"]
 
   pull_request:
-    branches: ["main"]
+    branches: ["main", "qa"]
 
   workflow_dispatch:
 
@@ -68,6 +68,7 @@ jobs:
         uses: SonarSource/sonarqube-scan-action@v8.2.2
         with:
           args: >
+            -Dsonar.organization=fmat-restaurant
             -Dsonar.projectKey=FMAT-Restaurant_Payments-BE
             -Dsonar.sources=PaymentsModule
             -Dsonar.qualitygate.wait=true

@@ -37,13 +37,6 @@ public class ChargeService(PaymentsDbContext db, PendingBillService bills, IPubl
             return new(ChargeOutcome.BillNotFound, Error: "No pending bill was found for this dinning session.");
         }
 
-        var shift = await db.CashShifts.AsNoTracking()
-            .SingleOrDefaultAsync(s => s.CashierId == cashierId && s.Status == CashShiftStatus.Open, ct);
-        if (shift is null)
-        {
-            return new(ChargeOutcome.NoOpenShift, Error: "The cashier has no open cash shift.");
-        }
-
         var total = bill.Totals.ExpectedTotal + request.Tip;
         var received = request.Payments.Sum(p => p.Amount);
         if (received < total)
@@ -56,6 +49,18 @@ public class ChargeService(PaymentsDbContext db, PendingBillService bills, IPubl
         if (request.Payments.Where(p => p.Method != PaymentMethod.Cash).Sum(p => p.Amount) > total)
         {
             return new(ChargeOutcome.ElectronicOverpayment, Error: "Electronic payments cannot exceed the bill total.");
+        }
+
+        await using var dbTransaction = await db.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
+
+        // UPDLOCK + INDEX seek locks only this cashier's open shift row, serializing against CloseAsync without blocking other cashiers.
+        var shift = await db.CashShifts
+            .FromSqlInterpolated($"SELECT * FROM CashShifts WITH (UPDLOCK, ROWLOCK, INDEX(IX_CashShifts_CashierId)) WHERE CashierId = {cashierId} AND Status = 'Open'")
+            .AsNoTracking()
+            .SingleOrDefaultAsync(ct);
+        if (shift is null)
+        {
+            return new(ChargeOutcome.NoOpenShift, Error: "The cashier has no open cash shift.");
         }
 
         var transaction = new PaymentTransaction
@@ -80,7 +85,6 @@ public class ChargeService(PaymentsDbContext db, PendingBillService bills, IPubl
             Payments = ApplyPayments(request.Payments, total)
         };
 
-        await using var dbTransaction = await db.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
         // Not composable: SQL Server rejects NEXT VALUE FOR inside the subquery EF would wrap around SingleAsync.
         transaction.Number = (await db.Database
             .SqlQueryRaw<long>($"SELECT NEXT VALUE FOR {PaymentsDbContext.FolioSequence} AS Value")
