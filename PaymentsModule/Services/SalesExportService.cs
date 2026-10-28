@@ -51,6 +51,13 @@ public class SalesExportService(PaymentsDbContext db)
     /// <returns>The number of data rows written.</returns>
     public static async Task<int> WriteCsvAsync(IAsyncEnumerable<SalesExportRow> rows, Stream output, CancellationToken ct = default)
     {
+        // Open the query and read the first row before writing anything. If the database is down or the query fails
+        // to start, the exception leaves with zero bytes sent, so the global handler can still answer 500. Writing
+        // the header first would let the writers' DisposeAsync flush it while the exception unwinds, which starts
+        // the response as 200 and turns the failure into an aborted download (PMC-15 scenario 3).
+        await using var enumerator = rows.GetAsyncEnumerator(ct);
+        var hasRow = await enumerator.MoveNextAsync();
+
         await using var text = new StreamWriter(output, Utf8NoBom, bufferSize: 16 * 1024, leaveOpen: true);
         await using var csv = new CsvWriter(text, new CsvConfiguration(CultureInfo.InvariantCulture));
 
@@ -62,8 +69,9 @@ public class SalesExportService(PaymentsDbContext db)
         await csv.NextRecordAsync();
 
         var count = 0;
-        await foreach (var row in rows.WithCancellation(ct))
+        while (hasRow)
         {
+            var row = enumerator.Current;
             csv.WriteField(row.Folio);
             csv.WriteField(row.CreatedAt.UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture));
             csv.WriteField(StatusLabel(row.Status));
@@ -80,6 +88,8 @@ public class SalesExportService(PaymentsDbContext db)
                 await csv.FlushAsync();
                 await text.FlushAsync(ct);
             }
+
+            hasRow = await enumerator.MoveNextAsync();
         }
 
         await csv.FlushAsync();

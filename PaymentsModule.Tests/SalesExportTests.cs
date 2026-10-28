@@ -154,7 +154,7 @@ public class SalesExportTests : IAsyncLifetime
 
         var badRequest = Assert.IsType<BadRequestObjectResult>(export.Result);
         var problem = Assert.IsType<ValidationProblemDetails>(badRequest.Value);
-        Assert.Equal(new[] { "El rango de fechas no puede exceder los 31 días" }, problem.Errors["fin"]);
+        Assert.Equal(new[] { "The date range cannot exceed 31 days." }, problem.Errors["fin"]);
         Assert.Equal(0, _probe.Commands);
         Assert.Equal(string.Empty, export.Body);
     }
@@ -201,6 +201,29 @@ public class SalesExportTests : IAsyncLifetime
         var lines = Lines(export.Body);
         Assert.Equal(551, lines.Length);
         Assert.All(lines, l => Assert.Equal(9, l.Split(',').Length));
+    }
+
+    // Scenario 3, before anything is sent: the database fails on the very first row. Nothing may reach the body, so
+    // the exception leaves the controller untouched and the global handler can still answer 500 (not 200 + abort).
+    [Fact]
+    public async Task Database_failure_on_the_first_row_propagates_before_anything_is_written()
+    {
+        var start = NextWindow();
+        await InsertSaleAsync(await NewShiftAsync(), start.AddHours(1), 10m, 0m, 0m, TransactionStatus.Completed,
+            (PaymentMethod.Cash, 10m));
+        _probe.FailAfterRows = 0;
+        using var body = new MemoryStream();
+
+        try
+        {
+            await Assert.ThrowsAsync<SimulatedConnectionLoss>(() => ExportAsync(start, start.AddDays(1), body: body));
+        }
+        finally
+        {
+            _probe.FailAfterRows = null;
+        }
+
+        Assert.Equal(0, body.Length);
     }
 
     // Scenario 4: an uncommitted sale is never exported (Read Committed: no dirty reads).
