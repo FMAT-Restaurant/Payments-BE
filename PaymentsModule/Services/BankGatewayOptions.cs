@@ -8,7 +8,7 @@ public class BankGatewayOptions
 {
     public const string SectionName = "BankGateway";
 
-    public string BaseUrl { get; set; } = "http://bank-gateway.invalid/";
+    public string BaseUrl { get; set; } = "https://bank-gateway.invalid/";
 
     /// <summary>When true, a local stub answers instead of a real HTTP call. Must stay false in any environment with a real gateway.</summary>
     public bool UseMock { get; set; }
