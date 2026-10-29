@@ -45,7 +45,9 @@ public class SaleCancellationService(PaymentsDbContext db, IBankGatewayClient ga
 
         await db.Entry(sale).Collection(t => t.Payments).LoadAsync(ct);
 
-        var cardPayments = sale.Payments.Where(p => p.Method != PaymentMethod.Cash).ToList();
+        var cardPayments = sale.Payments
+            .Where(p => p.Method is PaymentMethod.CreditCard or PaymentMethod.DebitCard)
+            .ToList();
 
         // Checked before the first refund so a missing reference never leaves some cards refunded and others not.
         if (cardPayments.Any(p => string.IsNullOrWhiteSpace(p.AuthorizationReference)))
