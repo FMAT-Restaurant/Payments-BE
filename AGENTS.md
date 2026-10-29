@@ -140,6 +140,31 @@ Agreed while implementing and reviewing PMC-8:
 
 ---
 
+## Change Calculation Decisions (PMC-13)
+
+Confirmed by the PO (PMC-13-P1 to P9). Most of the behaviour already existed since PMC-6; PMC-13 extracts it into a domain service, aligns messages and covers the scenarios:
+
+- **Domain service:** `IChargeCalculationService` / `ChargeCalculationService` (English names per this file, for the story's `ICalculoCobroDomainService`). It is pure (no I/O, registered as singleton) and returns `ChargeCalculation` with the status (`Covered`, `InsufficientFunds`, `ElectronicOverpayment`), the capped `PaymentBreakdown` list, `ChangeGiven` and `Deficit`. `ChargeService` keeps persistence, locking and the outbox.
+- **Change:** `cambio_entregado` = received - amount due, where amount due = `ExpectedTotal + propina`. Electronic payments are applied first and never capped; cash absorbs the excess with `Math.Min(amount, remaining)`, so the sum of `PaymentBreakdown` always equals `Total`.
+- **Electronic overpayment (422):** only when electronic payments on their own exceed the amount due. A mixed payment whose cash produces the change (e.g. card 50 + cash 100 over 120) is valid. `detail`: `"Electronic payments cannot exceed the bill total"` (PMC-13 Gherkin has it in Spanish; the PO decided error texts are in English). Checked in the service before any write; no `.Custom()` rule in `ChargeRequestValidator`, so validation errors stay `400` and the untrusted `detalles_snapshot` is not used for amounts.
+- **Card covering the whole bill plus cash:** the cash contributes nothing, no cash `PaymentBreakdown` row is stored, and the whole cash amount is returned as change.
+- **Not persisted:** neither the change nor the amount received is stored; they are computed in memory and only returned in the response. No entity or migration changes.
+- **Already paid (409):** any previous transaction of the session, including `CANCELADO`, answers `409` with `"The transaction has already been paid"` (consistent with PMC-12-P11). PMC-7 scenario 4 and PMC-13 share this one text on the same endpoint; the PO confirmed it as the definitive one, in English.
+- **Insufficient funds (422):** `detail` is `"Insufficient funds to cover the total"` (PMC-7 scenario 2 has it in Spanish; English by PO decision). The missing amount stays in the `deficit` extension and in `ChargeResult.Deficit`.
+- **Frontend impact:** the `detail` of the `409` and of the two `422` responses changed against `qa` (now fixed English texts). If the Frontend compares them, it must be told; it should rely on the status code and `deficit`.
+- **Database failure (500):** the `IDbContextTransaction` is rolled back and `UseExceptionHandler` answers the standard `500` ProblemDetails without internals.
+- **Precision (RNF-05):** every amount in the calculation, its result and `ChargeResponse.ChangeGiven` is `decimal`; no `float` or `double`.
+- **Tests:** `ChargeCalculationServiceTests` (pure, no database) and `ChangeCalculationTests` (real SQL Server, one test per Gherkin scenario; the `500` is checked through a real `TestServer` pipeline because calling the controller directly skips `UseExceptionHandler`).
+
+
+**PENDING** (not confirmed, to be validated before relying on them):
+
+- **Frontend:** the `detail` texts of the `409` and the two `422` changed; the Frontend still has to be told.
+- **Language of `detail`:** decided by the PO: all error texts are in English, including the ones the stories fix in Spanish (PMC-7 and PMC-13 Gherkin). The success message `"Cobro procesado exitosamente"` is not an error and keeps the contract text.
+- **Same endpoint as PMC-7:** its branch is in peer review and touches the same messages; whoever merges second must keep exactly the English texts above.
+
+---
+
 ## Real-Time Cash Shift Summary Decisions (PMC-9)
 
 Agreed while implementing PMC-9:
