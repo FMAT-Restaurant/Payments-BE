@@ -167,6 +167,22 @@ Confirmed with the story owner (Edwing) while implementing PMC-14:
 
 ---
 
+## Sales Export Decisions (PMC-15)
+
+Taken while implementing PMC-15; pending confirmation with the story owner where noted:
+
+- **Route and access:** `GET /api/v1/pagos/exportar?inicio=...&fin=...` (ISO 8601), restricted to `[Authorize(Roles = "Administrador")]`. Confirmed with Edwing (2026-10-28): the Gateway issues `Administrador` and cashier roles only, there is no `Contador` role, and cashiers do not export the accounting report.
+- **Window:** filters by the sale date (`PaymentTransaction.CreatedAt`), as a half-open window `[inicio, fin)` (agreed with Edwing, 2026-10-28): `CreatedAt` keeps fractions of a second, so an inclusive `fin=...23:59:59Z` would drop a sale at `23:59:59.400` from two consecutive reports. A month is requested as `inicio=2026-09-01T00:00:00Z&fin=2026-10-01T00:00:00Z`; the file is named after the last day covered (`reporte_ventas_20260901_20260930.csv`). `inicio` and `fin` are required, `fin >= inicio`, and the range cannot exceed 31 days (`SalesExportQueryValidator`); violations return `400` (`ValidationProblemDetails` keyed `inicio` / `fin`) before any database access. Messages are in English by PO decision (e.g. `"The date range cannot exceed 31 days."`), although scenario 2 of the story writes it in Spanish.
+- **Rows:** every sale in the window, cancelled ones included (`Estado` = `COMPLETADO` / `CANCELADO`), per scenario 4 of the story.
+- **Columns:** `Folio,Fecha,Estado,Subtotal,Impuestos,Propina,Total,Efectivo,Tarjetas`. `Fecha` is UTC ISO 8601 (`yyyy-MM-ddTHH:mm:ssZ`); amounts are `decimal` with invariant `0.00` format; `Efectivo` sums `Cash` breakdowns and `Tarjetas` sums `CreditCard` + `DebitCard`, both in SQL. The folio is exported as stored by `ChargeService`.
+- **Index:** `IX_Transactions_CreatedAt_Number` (migration `AddTransactionsCreatedAtIndex`) serves the sale-date window in the same order as the query, so the export seeks instead of scanning `Transactions`. Agreed with Edwing in review; with RCSI (PMC-9) readers no longer block charges, so the index is about volume, not deadlocks.
+- **Streaming:** `AsNoTracking().AsAsyncEnumerable()` written with CsvHelper (RFC 4180, UTF-8 without BOM) straight into `Response.Body`; no `ToList`. The writer flushes every 500 rows, always at record boundaries, and Kestrel sends the body chunked.
+- **Failure mid-stream:** the controller logs the error and calls `HttpContext.Abort()` so the client gets an incomplete download, never a file that looks finished. A failure before the response starts goes to the global exception handler (`500`): `WriteCsvAsync` reads the first row before writing the header, so a failure opening the query leaves with zero bytes sent instead of flushing the header (which would start a `200`) while the exception unwinds.
+- **Isolation:** the default SQL Server `READ COMMITTED` level, so uncommitted sales are never read. No calls to other microservices during the export.
+- **Tests:** `SalesExportTests` run against the same SQL Server test database, each test in its own date window. `SalesExportHttpTests` go through the real HTTP pipeline with `PaymentsApiFactory` (`payments_tests_http`): `200` for `Administrador`, `401` without token, `403` for a cashier role, `400` with the English message, `500` without internals when the query fails before anything is sent, and an aborted download when it fails after the first chunk (`FailingQueries.FailReadsAfter`).
+
+---
+
 ## General Rules
 
 - **Code Formatting:** All code contributions must adhere to repository standards and pass `dotnet format --verify-no-changes`.
