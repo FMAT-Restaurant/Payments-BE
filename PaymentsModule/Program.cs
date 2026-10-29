@@ -40,6 +40,7 @@ builder.Services.AddScoped<SalesHistoryService>();
 builder.Services.AddScoped<IValidator<CancelSaleRequest>, CancelSaleRequestValidator>();
 builder.Services.AddScoped<SaleCancellationService>();
 builder.Services.AddBankGateway(builder.Configuration);
+builder.Services.AddScoped<PrintTicketService>();
 
 builder.Services.AddDbContext<PaymentsDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("SqlServer")));
@@ -105,3 +106,6 @@ app.MapControllers();
 app.MapHealthChecks("/health");
 
 app.Run();
+
+// Lets the HTTP integration tests boot this app with WebApplicationFactory<Program>.
+public partial class Program;
