@@ -179,7 +179,7 @@ Taken while implementing PMC-15; pending confirmation with the story owner where
 - **Streaming:** `AsNoTracking().AsAsyncEnumerable()` written with CsvHelper (RFC 4180, UTF-8 without BOM) straight into `Response.Body`; no `ToList`. The writer flushes every 500 rows, always at record boundaries, and Kestrel sends the body chunked.
 - **Failure mid-stream:** the controller logs the error and calls `HttpContext.Abort()` so the client gets an incomplete download, never a file that looks finished. A failure before the response starts goes to the global exception handler (`500`): `WriteCsvAsync` reads the first row before writing the header, so a failure opening the query leaves with zero bytes sent instead of flushing the header (which would start a `200`) while the exception unwinds.
 - **Isolation:** the default SQL Server `READ COMMITTED` level, so uncommitted sales are never read. No calls to other microservices during the export.
-- **Tests:** `SalesExportTests` run against the same SQL Server test database, each test in its own date window.
+- **Tests:** `SalesExportTests` run against the same SQL Server test database, each test in its own date window. `SalesExportHttpTests` go through the real HTTP pipeline with `PaymentsApiFactory` (`payments_tests_http`): `200` for `Administrador`, `401` without token, `403` for a cashier role, `400` with the English message, `500` without internals when the query fails before anything is sent, and an aborted download when it fails after the first chunk (`FailingQueries.FailReadsAfter`).
 
 ---
 
