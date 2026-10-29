@@ -37,6 +37,9 @@ builder.Services.AddScoped<CashShiftService>();
 builder.Services.AddScoped<TransactionDetailService>();
 builder.Services.AddScoped<IValidator<SalesHistoryQuery>, SalesHistoryQueryValidator>();
 builder.Services.AddScoped<SalesHistoryService>();
+builder.Services.AddScoped<IValidator<CancelSaleRequest>, CancelSaleRequestValidator>();
+builder.Services.AddScoped<SaleCancellationService>();
+builder.Services.AddBankGateway(builder.Configuration);
 builder.Services.AddScoped<PrintTicketService>();
 
 builder.Services.AddDbContext<PaymentsDbContext>(options =>
