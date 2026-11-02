@@ -78,9 +78,16 @@ public class SaleCancellationService(PaymentsDbContext db, IBankGatewayClient ga
             }
             catch (BankGatewayException ex)
             {
-                logger.LogError(ex,
-                    "Refund failed while cancelling {Folio}; {ConfirmedRefunds} refund(s) were already confirmed by the gateway and need reconciliation.",
-                    sale.Folio, references.Count);
+                if (references.Count == 0)
+                {
+                    logger.LogError(ex, "Refund failed while cancelling {Folio}; no refund had been confirmed yet.", sale.Folio);
+                }
+                else
+                {
+                    // Earlier cards were already refunded: log their references and amount so the sale can be reconciled by hand.
+                    LogRefundsWithoutCancellation(ex, sale.Folio, references, refunded);
+                }
+
                 return new(CancelSaleOutcome.GatewayFailure,
                     Error: "The bank gateway could not process the refund, so the sale was not cancelled.");
             }
