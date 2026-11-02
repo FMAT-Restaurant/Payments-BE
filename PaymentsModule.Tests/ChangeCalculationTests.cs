@@ -1,25 +1,18 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Security.Claims;
-using System.Text.Encodings.Web;
 using System.Text.Json;
 using FluentValidation;
 using MassTransit;
 using MassTransit.EntityFrameworkCoreIntegration;
 using MassTransit.Testing;
-using Microsoft.AspNetCore.Authentication;
-using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using PaymentsModule.Controllers;
 using PaymentsModule.Data;
@@ -30,19 +23,20 @@ namespace PaymentsModule.Tests;
 
 // PMC-13 Gherkin scenarios against the real SQL Server, same pattern as ChargeServiceTests.
 // Every test uses its own dinning session and cashier, because test classes run in parallel on the same database.
-public class ChangeCalculationTests : IAsyncLifetime
+public class ChangeCalculationTests : IClassFixture<PaymentsApiFactory>, IAsyncLifetime
 {
     private static readonly string ConnectionString =
         Environment.GetEnvironmentVariable("ConnectionStrings__SqlServer")
         ?? "Server=localhost,14330;Database=payments_tests;User Id=sa;Password=Payments_Dev_2026!;TrustServerCertificate=True";
 
-    // Shared by the test provider and the TestServer host, so the pending bill seeded here is visible to both.
     private readonly IDistributedCache _cache = new MemoryDistributedCache(Options.Create(new MemoryDistributedCacheOptions()));
     private readonly TimeoutOnBreakdownInsert _timeout = new();
     private readonly ServiceProvider _provider;
+    private readonly PaymentsApiFactory _api;
 
-    public ChangeCalculationTests()
+    public ChangeCalculationTests(PaymentsApiFactory api)
     {
+        _api = api;
         var services = new ServiceCollection().AddLogging();
         RegisterApplication(services);
         _provider = services.BuildServiceProvider(true);
@@ -52,6 +46,7 @@ public class ChangeCalculationTests : IAsyncLifetime
 
     public async Task InitializeAsync()
     {
+        await PaymentsApiFactory.EnsureDatabaseAsync();
         await using (var scope = _provider.CreateAsyncScope())
         {
             await ChargeServiceTests.EnsureMigratedAsync(scope.ServiceProvider.GetRequiredService<PaymentsDbContext>());
@@ -98,12 +93,16 @@ public class ChangeCalculationTests : IAsyncLifetime
         Assert.Equal(saved.Total, saved.Payments.Sum(p => p.Amount));
     }
 
+    // Serialized by MVC in the real pipeline, so a change in Program.cs's JsonOptions breaks this test.
     [Fact]
-    public void Scenario1_response_carries_cambio_entregado_on_the_wire()
+    public async Task Scenario1_response_carries_cambio_entregado_on_the_wire()
     {
-        var json = JsonSerializer.Serialize(new ChargeResponse("TX-20260929-000005", 80m, TransactionStatus.Completed, 20.00m, "Cobro procesado exitosamente"));
+        var (session, cashier) = await ArrangeAsync(billTotal: 80m, _api.Services);
 
-        using var document = JsonDocument.Parse(json);
+        var (status, body) = await PostThroughApiAsync(Request(session, Cash(100m)), cashier);
+
+        Assert.Equal(HttpStatusCode.Created, status);
+        using var document = JsonDocument.Parse(body);
         Assert.Equal(20.00m, document.RootElement.GetProperty("cambio_entregado").GetDecimal());
         Assert.Equal(80m, document.RootElement.GetProperty("total").GetDecimal());
         Assert.Equal("COMPLETADO", document.RootElement.GetProperty("estado").GetString());
@@ -190,10 +189,11 @@ public class ChangeCalculationTests : IAsyncLifetime
     [Fact]
     public async Task Scenario3_database_timeout_answers_a_generic_500_through_the_pipeline()
     {
-        var (session, cashier) = await ArrangeAsync(billTotal: 80m);
-        _timeout.FailFor(session);
+        var (session, cashier) = await ArrangeAsync(billTotal: 80m, _api.Services);
+        // The first query of the charge looks up the cashier's open shift, so failing on the cashier id times out the request.
+        _api.Failures.FailQueriesWith(cashier);
 
-        var (status, body) = await PostThroughPipelineAsync(Request(session, Cash(100m)), cashier);
+        var (status, body) = await PostThroughApiAsync(Request(session, Cash(100m)), cashier);
 
         Assert.Equal(HttpStatusCode.InternalServerError, status);
         using var problem = JsonDocument.Parse(body);
@@ -201,7 +201,7 @@ public class ChangeCalculationTests : IAsyncLifetime
         // PMC-13-P9: standard ProblemDetails without internals.
         Assert.DoesNotContain("Simulated", body);
         Assert.DoesNotContain("PaymentBreakdown", body);
-        Assert.Null(await FindAsync(session));
+        Assert.Null(await FindAsync(session, _api.Services));
     }
 
     [Fact]
@@ -252,11 +252,11 @@ public class ChangeCalculationTests : IAsyncLifetime
         Assert.Equal(1, await CountAsync(session));
     }
 
-    private async Task<(Guid Session, string Cashier)> ArrangeAsync(decimal billTotal)
+    private async Task<(Guid Session, string Cashier)> ArrangeAsync(decimal billTotal, IServiceProvider? services = null)
     {
         var session = Guid.NewGuid();
         var cashier = $"cashier-{Guid.NewGuid()}";
-        await using var scope = _provider.CreateAsyncScope();
+        await using var scope = (services ?? _provider).CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<PaymentsDbContext>();
         db.CashShifts.Add(new CashShift { CashierId = cashier, InitialFund = 500m });
         await db.SaveChangesAsync();
@@ -294,44 +294,17 @@ public class ChangeCalculationTests : IAsyncLifetime
         return Assert.IsAssignableFrom<ObjectResult>(await controller.Charge(request, CancellationToken.None));
     }
 
-    // Calling the controller directly skips UseExceptionHandler, so the 500 is checked through a real TestServer pipeline.
-    private async Task<(HttpStatusCode Status, string Body)> PostThroughPipelineAsync(ChargeRequest request, string cashierId)
+    // Calling the controller directly skips UseExceptionHandler, so the 500 and the wire format go through the real Program.cs pipeline.
+    private async Task<(HttpStatusCode Status, string Body)> PostThroughApiAsync(ChargeRequest request, string cashierId)
     {
-        using var host = await new HostBuilder()
-            .ConfigureWebHost(web =>
-            {
-                web.UseTestServer();
-                web.ConfigureServices(services =>
-                {
-                    services.AddLogging();
-                    services.AddControllers().AddApplicationPart(typeof(PaymentsController).Assembly);
-                    services.AddProblemDetails();
-                    services.AddAuthentication("Test").AddScheme<AuthenticationSchemeOptions, TestAuthHandler>("Test", _ => { });
-                    services.AddAuthorization();
-                    RegisterApplication(services);
-                });
-                web.Configure(app =>
-                {
-                    // Same order as Program.cs.
-                    app.UseExceptionHandler();
-                    app.UseRouting();
-                    app.UseAuthentication();
-                    app.UseAuthorization();
-                    app.UseEndpoints(endpoints => endpoints.MapControllers());
-                });
-            })
-            .StartAsync();
-
-        using var client = host.GetTestClient();
-        using var message = new HttpRequestMessage(HttpMethod.Post, "/api/v1/pagos/cobrar") { Content = JsonContent.Create(request) };
-        message.Headers.Add("X-Test-User", cashierId);
-        using var response = await client.SendAsync(message);
+        using var client = _api.CreateAuthenticatedClient(cashierId);
+        using var response = await client.PostAsJsonAsync("/api/v1/pagos/cobrar", request);
         return (response.StatusCode, await response.Content.ReadAsStringAsync());
     }
 
-    private async Task<PaymentTransaction?> FindAsync(Guid session)
+    private async Task<PaymentTransaction?> FindAsync(Guid session, IServiceProvider? services = null)
     {
-        await using var scope = _provider.CreateAsyncScope();
+        await using var scope = (services ?? _provider).CreateAsyncScope();
         return await scope.ServiceProvider.GetRequiredService<PaymentsDbContext>().Transactions.AsNoTracking()
             .Include(t => t.Payments)
             .SingleOrDefaultAsync(t => t.DinningSessionId == session);
@@ -389,21 +362,6 @@ public class ChangeCalculationTests : IAsyncLifetime
             }
 
             return base.SavingChangesAsync(eventData, result, cancellationToken);
-        }
-    }
-
-    private sealed class TestAuthHandler(IOptionsMonitor<AuthenticationSchemeOptions> options, ILoggerFactory logger, UrlEncoder encoder)
-        : AuthenticationHandler<AuthenticationSchemeOptions>(options, logger, encoder)
-    {
-        protected override Task<AuthenticateResult> HandleAuthenticateAsync()
-        {
-            if (!Request.Headers.TryGetValue("X-Test-User", out var user))
-            {
-                return Task.FromResult(AuthenticateResult.NoResult());
-            }
-
-            var identity = new ClaimsIdentity([new Claim(ClaimTypes.NameIdentifier, user.ToString())], "Test");
-            return Task.FromResult(AuthenticateResult.Success(new AuthenticationTicket(new ClaimsPrincipal(identity), "Test")));
         }
     }
 }

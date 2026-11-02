@@ -8,6 +8,8 @@ using Microsoft.AspNetCore.TestHost;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.Extensions.Caching.Distributed;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
@@ -23,6 +25,8 @@ namespace PaymentsModule.Tests;
 /// <list type="bullet">
 /// <item>Authentication: the API Gateway JWT becomes <see cref="TestAuthHandler"/> (header based).</item>
 /// <item>MassTransit: RabbitMQ becomes MassTransit's in-memory test harness.</item>
+/// <item>Cache: Redis becomes an in-memory <see cref="IDistributedCache"/>, so tests can seed a pending bill (PMC-5)
+/// through <c>PendingBillService</c> without a Redis server.</item>
 /// <item>Database: a SQL Server test database of its own (<c>payments_tests_http</c>), with <see cref="Failures"/>
 /// to simulate timeouts. Its own database matters: the app runs hosted services (e.g. MassTransit's outbox
 /// delivery) that must never touch the database other suites are using at the same time.</item>
@@ -106,6 +110,9 @@ public sealed class PaymentsApiFactory : WebApplicationFactory<Program>
 
             // Replaces the RabbitMQ bus configured in Program.cs with the in-memory one; consumers stay registered.
             services.AddMassTransitTestHarness();
+
+            services.RemoveAll<IDistributedCache>();
+            services.AddSingleton<IDistributedCache>(new MemoryDistributedCache(Options.Create(new MemoryDistributedCacheOptions())));
 
             services.RemoveAll<IDbContextOptionsConfiguration<PaymentsDbContext>>();
             services.AddDbContext<PaymentsDbContext>(o => o.UseSqlServer(ConnectionString).AddInterceptors(Failures));
