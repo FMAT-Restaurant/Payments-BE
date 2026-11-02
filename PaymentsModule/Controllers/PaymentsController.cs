@@ -19,6 +19,7 @@ public class PaymentsController(ChargeService charges, IValidator<ChargeRequest>
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status404NotFound)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status409Conflict)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status422UnprocessableEntity)]
+    [ProducesResponseType<ProblemDetails>(StatusCodes.Status503ServiceUnavailable)]
     public async Task<IActionResult> Charge(ChargeRequest request, CancellationToken ct)
     {
         var validation = await validator.ValidateAsync(request, ct);
@@ -46,6 +47,7 @@ public class PaymentsController(ChargeService charges, IValidator<ChargeRequest>
             {
                 ChargeOutcome.AlreadyPaid => StatusCodes.Status409Conflict,
                 ChargeOutcome.BillNotFound => StatusCodes.Status404NotFound,
+                ChargeOutcome.GatewayUnavailable => StatusCodes.Status503ServiceUnavailable,
                 _ => StatusCodes.Status422UnprocessableEntity
             },
             Detail = result.Error

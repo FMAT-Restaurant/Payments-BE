@@ -15,6 +15,8 @@ public class ChargeRequestValidator : AbstractValidator<ChargeRequest>
         {
             p.RuleFor(i => i.Method).IsInEnum();
             p.RuleFor(i => i.Amount).GreaterThan(0m).PrecisionScale(18, 2, true);
+            // Card payments are validated in the bank gateway, which needs the terminal's authorization reference.
+            p.RuleFor(i => i.AuthorizationReference).NotEmpty().MaximumLength(100).When(i => i.Method != PaymentMethod.Cash);
         });
 
         RuleFor(x => x.ItemsSnapshot).NotEmpty();
