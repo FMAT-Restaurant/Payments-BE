@@ -4,10 +4,8 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Security.Claims;
 using System.Text;
-using System.Text.Encodings.Web;
 using System.Text.Json;
 using FluentValidation;
-using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -18,8 +16,6 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.JsonWebTokens;
 using Microsoft.IdentityModel.Tokens;
 using PaymentsModule.Controllers;
@@ -31,7 +27,7 @@ namespace PaymentsModule.Tests;
 
 // Runs against a real SQL Server: `docker compose up -d sqlserver` locally, a service container in CI.
 // The bank gateway is a scripted HTTP handler behind the real retry/timeout pipeline.
-public class SaleCancellationTests : IAsyncLifetime
+public class SaleCancellationTests : IClassFixture<PaymentsApiFactory>, IAsyncLifetime
 {
     private static readonly string ConnectionString =
         Environment.GetEnvironmentVariable("ConnectionStrings__SqlServer")
@@ -50,9 +46,11 @@ public class SaleCancellationTests : IAsyncLifetime
     private readonly FailOnCancellationInsert _failure = new();
     private readonly ScriptedBankHandler _bank = new();
     private readonly ServiceProvider _provider;
+    private readonly PaymentsApiFactory _api;
 
-    public SaleCancellationTests()
+    public SaleCancellationTests(PaymentsApiFactory api)
     {
+        _api = api;
         var services = new ServiceCollection().AddLogging();
         RegisterApplication(services);
         _provider = services.BuildServiceProvider(true);
@@ -60,6 +58,7 @@ public class SaleCancellationTests : IAsyncLifetime
 
     public async Task InitializeAsync()
     {
+        await PaymentsApiFactory.EnsureDatabaseAsync();
         await using var scope = _provider.CreateAsyncScope();
         await ChargeServiceTests.EnsureMigratedAsync(scope.ServiceProvider.GetRequiredService<PaymentsDbContext>());
     }
@@ -401,14 +400,14 @@ public class SaleCancellationTests : IAsyncLifetime
     [InlineData("administrador", StatusCodes.Status403Forbidden)]
     public async Task Pipeline_authorizes_only_gerente_administrador_and_admin(string role, int expectedStatus)
     {
-        var sale = await SeedSaleAsync(0m, Cash(60m));
+        var sale = await SeedSaleAsync(_api.Services, 0m, Cash(60m));
 
-        var (status, _) = await PostThroughPipelineAsync(sale.Folio, user: "user-1", role: role);
+        var (status, _) = await PostThroughApiAsync(sale.Folio, user: "user-1", role);
 
         Assert.Equal(expectedStatus, (int)status);
-        var cancellations = await FindCancellationsAsync(sale.Id);
+        var cancellations = await FindCancellationsAsync(_api.Services, sale.Id);
         Assert.Equal(expectedStatus == StatusCodes.Status200OK ? 1 : 0, cancellations.Count);
-        Assert.Equal(expectedStatus == StatusCodes.Status200OK ? TransactionStatus.Cancelled : TransactionStatus.Completed, (await FindSaleAsync(sale.Folio)).Status);
+        Assert.Equal(expectedStatus == StatusCodes.Status200OK ? TransactionStatus.Cancelled : TransactionStatus.Completed, (await FindSaleAsync(_api.Services, sale.Folio)).Status);
     }
 
     // Program.cs registers JwtBearer with its defaults and relies on its claim mapping: "role" becomes ClaimTypes.Role and "sub" NameIdentifier.
@@ -440,20 +439,20 @@ public class SaleCancellationTests : IAsyncLifetime
     [Fact]
     public async Task Pipeline_rejects_a_request_without_a_token_with_401()
     {
-        var sale = await SeedSaleAsync(0m, Cash(60m));
+        var sale = await SeedSaleAsync(_api.Services, 0m, Cash(60m));
 
-        var (status, _) = await PostThroughPipelineAsync(sale.Folio, user: null, role: null);
+        var (status, _) = await PostThroughApiAsync(sale.Folio, user: null);
 
         Assert.Equal(HttpStatusCode.Unauthorized, status);
-        Assert.Empty(await FindCancellationsAsync(sale.Id));
+        Assert.Empty(await FindCancellationsAsync(_api.Services, sale.Id));
     }
 
     [Fact]
     public async Task Pipeline_answers_the_pmc12_wire_contract()
     {
-        var sale = await SeedSaleAsync(0m, Cash(60m));
+        var sale = await SeedSaleAsync(_api.Services, 0m, Cash(60m));
 
-        var (status, body) = await PostThroughPipelineAsync(sale.Folio, user: "manager-1", role: "Gerente");
+        var (status, body) = await PostThroughApiAsync(sale.Folio, user: "manager-1", "Gerente");
 
         Assert.Equal(HttpStatusCode.OK, status);
         using var json = JsonDocument.Parse(body);
@@ -461,22 +460,8 @@ public class SaleCancellationTests : IAsyncLifetime
         Assert.Equal(sale.Folio, root.GetProperty("folio").GetString());
         Assert.Equal("CANCELADO", root.GetProperty("estado").GetString());
         Assert.Equal(SaleCancellationService.SuccessMessage, root.GetProperty("mensaje").GetString());
-        var cancellation = Assert.Single(await FindCancellationsAsync(sale.Id));
+        var cancellation = Assert.Single(await FindCancellationsAsync(_api.Services, sale.Id));
         Assert.Equal(cancellation.CancelledAt, root.GetProperty("fecha_cancelacion").GetDateTimeOffset());
-    }
-
-    [Fact]
-    public void Keeps_the_wire_contract_from_pmc12()
-    {
-        var request = JsonSerializer.Deserialize<CancelSaleRequest>("""{ "motivo": "Customer reported an error" }""")!;
-        var response = JsonSerializer.Serialize(new CancelSaleResponse(
-            "TX-20261023-000001", TransactionStatus.Cancelled, new DateTimeOffset(2026, 9, 29, 18, 0, 0, TimeSpan.Zero), "ok"));
-
-        Assert.Equal("Customer reported an error", request.Reason);
-        Assert.Contains("\"folio\":\"TX-20261023-000001\"", response);
-        Assert.Contains("\"estado\":\"CANCELADO\"", response);
-        Assert.Contains("\"fecha_cancelacion\":", response);
-        Assert.Contains("\"mensaje\":\"ok\"", response);
     }
 
     // ---- Regression: a cancelled sale no longer counts in the cash shift close (PMC-8) ----
@@ -505,9 +490,13 @@ public class SaleCancellationTests : IAsyncLifetime
         (PaymentMethod.CreditCard, amount, reference);
 
     // Every sale gets its own cashier, shift and folio, so test classes can run in parallel on the same database.
-    private async Task<PaymentTransaction> SeedSaleAsync(decimal tip, params (PaymentMethod Method, decimal Amount, string? Reference)[] payments)
+    private Task<PaymentTransaction> SeedSaleAsync(decimal tip, params (PaymentMethod Method, decimal Amount, string? Reference)[] payments) =>
+        SeedSaleAsync(_provider, tip, payments);
+
+    private static async Task<PaymentTransaction> SeedSaleAsync(
+        IServiceProvider services, decimal tip, params (PaymentMethod Method, decimal Amount, string? Reference)[] payments)
     {
-        await using var scope = _provider.CreateAsyncScope();
+        await using var scope = services.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<PaymentsDbContext>();
         var shift = new CashShift { CashierId = $"cashier-{Guid.NewGuid()}", InitialFund = 500m };
         db.CashShifts.Add(shift);
@@ -580,23 +569,14 @@ public class SaleCancellationTests : IAsyncLifetime
             SigningCredentials = new SigningCredentials(new SymmetricSecurityKey(Encoding.UTF8.GetBytes(JwtSigningKey)), SecurityAlgorithms.HmacSha256)
         });
 
-    // Direct controller calls skip the authorization filter, so RBAC is checked through a real TestServer pipeline.
-    private Task<(HttpStatusCode Status, string Body)> PostThroughPipelineAsync(string folio, string? user, string? role) =>
-        PostCancelAsync(
-            folio,
-            services => services.AddAuthentication("Test").AddScheme<AuthenticationSchemeOptions, TestAuthHandler>("Test", _ => { }),
-            request =>
-            {
-                if (user is not null)
-                {
-                    request.Headers.Add("X-Test-User", user);
-                }
-
-                if (role is not null)
-                {
-                    request.Headers.Add("X-Test-Role", role);
-                }
-            });
+    // Direct controller calls skip the authorization filter, so RBAC goes through the real Program.cs pipeline (PaymentsApiFactory).
+    private async Task<(HttpStatusCode Status, string Body)> PostThroughApiAsync(string folio, string? user, params string[] roles)
+    {
+        using var client = user is null ? _api.CreateAnonymousClient() : _api.CreateAuthenticatedClient(user, roles);
+        using var response = await client.PostAsJsonAsync(
+            $"/api/v1/pagos/{folio}/cancelar", new { motivo = "Customer reported an error in the bill" });
+        return (response.StatusCode, await response.Content.ReadAsStringAsync());
+    }
 
     // Same pipeline with the real JwtBearer handler (default claim mapping), signed with a local key instead of an authority.
     private Task<(HttpStatusCode Status, string Body)> PostWithJwtAsync(string folio, string token) =>
@@ -646,17 +626,21 @@ public class SaleCancellationTests : IAsyncLifetime
         return (response.StatusCode, await response.Content.ReadAsStringAsync());
     }
 
-    private async Task<PaymentTransaction> FindSaleAsync(string folio)
+    private Task<PaymentTransaction> FindSaleAsync(string folio) => FindSaleAsync(_provider, folio);
+
+    private static async Task<PaymentTransaction> FindSaleAsync(IServiceProvider services, string folio)
     {
-        await using var scope = _provider.CreateAsyncScope();
+        await using var scope = services.CreateAsyncScope();
         return await scope.ServiceProvider.GetRequiredService<PaymentsDbContext>().Transactions.AsNoTracking()
             .Include(t => t.Items).Include(t => t.Payments)
             .SingleAsync(t => t.Folio == folio);
     }
 
-    private async Task<List<SaleCancellation>> FindCancellationsAsync(Guid transactionId)
+    private Task<List<SaleCancellation>> FindCancellationsAsync(Guid transactionId) => FindCancellationsAsync(_provider, transactionId);
+
+    private static async Task<List<SaleCancellation>> FindCancellationsAsync(IServiceProvider services, Guid transactionId)
     {
-        await using var scope = _provider.CreateAsyncScope();
+        await using var scope = services.CreateAsyncScope();
         return await scope.ServiceProvider.GetRequiredService<PaymentsDbContext>().SaleCancellations.AsNoTracking()
             .Where(c => c.TransactionId == transactionId)
             .ToListAsync();
@@ -716,28 +700,6 @@ public class SaleCancellationTests : IAsyncLifetime
             }
 
             return base.SavingChangesAsync(eventData, result, cancellationToken);
-        }
-    }
-
-    // Authenticates from test headers; no header means no identity (401), a wrong role means 403.
-    private sealed class TestAuthHandler(IOptionsMonitor<AuthenticationSchemeOptions> options, ILoggerFactory logger, UrlEncoder encoder)
-        : AuthenticationHandler<AuthenticationSchemeOptions>(options, logger, encoder)
-    {
-        protected override Task<AuthenticateResult> HandleAuthenticateAsync()
-        {
-            if (!Request.Headers.TryGetValue("X-Test-User", out var user))
-            {
-                return Task.FromResult(AuthenticateResult.NoResult());
-            }
-
-            var claims = new List<Claim> { new(ClaimTypes.NameIdentifier, user.ToString()) };
-            if (Request.Headers.TryGetValue("X-Test-Role", out var role))
-            {
-                claims.Add(new Claim(ClaimTypes.Role, role.ToString()));
-            }
-
-            var principal = new ClaimsPrincipal(new ClaimsIdentity(claims, "Test"));
-            return Task.FromResult(AuthenticateResult.Success(new AuthenticationTicket(principal, "Test")));
         }
     }
 }
