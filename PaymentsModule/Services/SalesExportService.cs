@@ -47,8 +47,9 @@ public class SalesExportService(PaymentsDbContext db)
             .AsAsyncEnumerable();
 
     /// <summary>
-    /// Writes the header and every row to <paramref name="output"/>, flushing every <see cref="FlushEvery"/> rows.
-    /// Flushes only happen between records, so whatever reached the client is always made of complete lines.
+    /// Writes the header and every row to <paramref name="output"/> in blocks of <see cref="FlushEvery"/> rows. Each
+    /// block is built in memory and reaches <paramref name="output"/> only once it is complete, so the response only
+    /// ever receives whole records: if the database drops in the middle of a block, that block is discarded.
     /// </summary>
     /// <returns>The number of data rows written.</returns>
     public static async Task<int> WriteCsvAsync(IAsyncEnumerable<SalesExportRow> rows, Stream output, CancellationToken ct = default)
@@ -60,7 +61,13 @@ public class SalesExportService(PaymentsDbContext db)
         await using var enumerator = rows.GetAsyncEnumerator(ct);
         var hasRow = await enumerator.MoveNextAsync();
 
-        await using var text = new StreamWriter(output, Utf8NoBom, bufferSize: 16 * 1024, leaveOpen: true);
+        // The CSV and text writers empty their own buffers whenever they fill, in the middle of a record, and also on
+        // dispose while an exception unwinds. They therefore write to `block`, never to `output`: only SendBlockAsync
+        // touches the response, between records. A failure leaves the client with whole lines (nothing is written right
+        // before the controller aborts the connection), and the response does not even start before the first block,
+        // so a failure within the first FlushEvery rows still ends as a 500 (PMC-15 scenario 3).
+        using var block = new MemoryStream();
+        await using var text = new StreamWriter(block, Utf8NoBom, bufferSize: 16 * 1024, leaveOpen: true);
         await using var csv = new CsvWriter(text, new CsvConfiguration(CultureInfo.InvariantCulture));
 
         foreach (var column in Header)
@@ -87,16 +94,25 @@ public class SalesExportService(PaymentsDbContext db)
 
             if (++count % FlushEvery == 0)
             {
-                await csv.FlushAsync();
-                await text.FlushAsync(ct);
+                await SendBlockAsync(csv, text, block, output, ct);
             }
 
             hasRow = await enumerator.MoveNextAsync();
         }
 
+        await SendBlockAsync(csv, text, block, output, ct);
+        return count;
+    }
+
+    // Moves the complete records gathered in `block` to the response in a single write, flushes it so Kestrel sends
+    // the chunk, and empties the block for the next rows.
+    private static async Task SendBlockAsync(CsvWriter csv, StreamWriter text, MemoryStream block, Stream output, CancellationToken ct)
+    {
         await csv.FlushAsync();
         await text.FlushAsync(ct);
-        return count;
+        await output.WriteAsync(block.GetBuffer().AsMemory(0, (int)block.Length), ct);
+        await output.FlushAsync(ct);
+        block.SetLength(0);
     }
 
     /// <summary>
