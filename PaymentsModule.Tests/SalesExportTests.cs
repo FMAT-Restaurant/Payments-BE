@@ -194,7 +194,8 @@ public class SalesExportTests : IAsyncLifetime
     }
 
     [Theory]
-    [InlineData(0, true)]
+    [InlineData(0, false)]
+    [InlineData(1, true)]
     [InlineData(31 * 24 * 60, true)]
     [InlineData(31 * 24 * 60 + 1, false)]
     [InlineData(-1, false)]
