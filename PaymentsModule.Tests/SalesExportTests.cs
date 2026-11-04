@@ -194,7 +194,8 @@ public class SalesExportTests : IAsyncLifetime
     }
 
     [Theory]
-    [InlineData(0, true)]
+    [InlineData(0, false)]
+    [InlineData(1, true)]
     [InlineData(31 * 24 * 60, true)]
     [InlineData(31 * 24 * 60 + 1, false)]
     [InlineData(-1, false)]
@@ -207,7 +208,8 @@ public class SalesExportTests : IAsyncLifetime
         Assert.Equal(valid, result.IsValid);
     }
 
-    // Scenario 3: the database drops while row 551 is being read.
+    // Scenario 3: the database drops while row 551 is being read. The first block of 500 rows had already been sent;
+    // the second one is discarded instead of being half written right before the connection is aborted.
     [Fact]
     public async Task Database_failure_mid_stream_aborts_the_response_logs_and_keeps_complete_lines()
     {
@@ -220,10 +222,10 @@ public class SalesExportTests : IAsyncLifetime
         _probe.FailAfterRows = null;
         Assert.True(export.Lifetime.Aborted);
         Assert.Contains(_logs.Entries, e => e.Level == LogLevel.Error && e.Exception is SimulatedConnectionLoss && e.Message.Contains("failed mid-stream"));
-        // Only whole records reached the client: header + 550 rows, each with 9 fields, ending in a line break.
+        // Only whole blocks reached the client: header + the first 500 rows, each with 9 fields, ending in a line break.
         Assert.EndsWith("\r\n", export.Body);
         var lines = Lines(export.Body);
-        Assert.Equal(551, lines.Length);
+        Assert.Equal(1 + SalesExportService.FlushEvery, lines.Length);
         Assert.All(lines, l => Assert.Equal(9, l.Split(',').Length));
     }
 
@@ -236,6 +238,28 @@ public class SalesExportTests : IAsyncLifetime
         await InsertSaleAsync(await NewShiftAsync(), start.AddHours(1), 10m, 0m, 0m, TransactionStatus.Completed,
             (PaymentMethod.Cash, 10m));
         _probe.FailAfterRows = 0;
+        using var body = new MemoryStream();
+
+        try
+        {
+            await Assert.ThrowsAsync<SimulatedConnectionLoss>(() => ExportAsync(start, start.AddDays(1), body: body));
+        }
+        finally
+        {
+            _probe.FailAfterRows = null;
+        }
+
+        Assert.Equal(0, body.Length);
+    }
+
+    // Scenario 3 inside the first block: nothing has been sent yet when the database drops at row 101, so the
+    // exception leaves the controller untouched and the global handler can still answer 500.
+    [Fact]
+    public async Task Database_failure_within_the_first_block_propagates_before_anything_is_written()
+    {
+        var start = NextWindow();
+        await BulkInsertSalesAsync(await NewShiftAsync(), start, 300);
+        _probe.FailAfterRows = 100;
         using var body = new MemoryStream();
 
         try

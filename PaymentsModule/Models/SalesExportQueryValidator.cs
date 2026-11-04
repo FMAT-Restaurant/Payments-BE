@@ -17,8 +17,9 @@ public class SalesExportQueryValidator : AbstractValidator<SalesExportQuery>
         When(x => x.Start.HasValue && x.End.HasValue, () =>
         {
             RuleFor(x => x.End)
-                .Must((query, end) => end >= query.Start)
-                .WithMessage("The date range is invalid: inicio must not be after fin.")
+                // fin is exclusive, so inicio == fin would always be an empty window.
+                .Must((query, end) => end > query.Start)
+                .WithMessage("The date range is invalid: inicio must be before fin.")
                 .Must((query, end) => end - query.Start <= MaxRange)
                 .WithMessage("The date range cannot exceed 31 days.")
                 .OverridePropertyName("fin");
