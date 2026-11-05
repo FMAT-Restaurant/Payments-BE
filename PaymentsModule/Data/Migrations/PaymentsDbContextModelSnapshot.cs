@@ -337,6 +337,8 @@ namespace PaymentsModule.Data.Migrations
 
                     b.HasIndex("CashShiftId");
 
+                    b.HasIndex("CreatedAt", "Number");
+
                     b.HasIndex("DinningSessionId")
                         .IsUnique();
 
