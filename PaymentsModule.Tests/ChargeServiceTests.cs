@@ -37,6 +37,7 @@ public class ChargeServiceTests : IAsyncLifetime
             .AddDbContext<PaymentsDbContext>(o => o.UseSqlServer(ConnectionString).AddInterceptors(_failure))
             .AddScoped<PendingBillService>()
             .AddScoped<ChargeService>()
+            .AddSingleton<IChargeCalculationService, ChargeCalculationService>()
             .AddScoped<IValidator<ChargeRequest>, ChargeRequestValidator>()
             .AddMassTransitTestHarness(x =>
             {
@@ -240,8 +241,10 @@ public class ChargeServiceTests : IAsyncLifetime
         var anonymous = await ControllerChargeAsync(Request(session, Cash(250m)), cashierId: null);
 
         Assert.Equal(StatusCodes.Status422UnprocessableEntity, insufficient.StatusCode);
+        Assert.Equal("Insufficient funds to cover the total", ((ProblemDetails)insufficient.Value!).Detail);
         Assert.Equal(50m, ((ProblemDetails)insufficient.Value!).Extensions["deficit"]);
         Assert.Equal(StatusCodes.Status409Conflict, duplicate.StatusCode);
+        Assert.Equal("The transaction has already been paid", ((ProblemDetails)duplicate.Value!).Detail);
         Assert.Equal(StatusCodes.Status400BadRequest, invalid.StatusCode);
         Assert.Equal(StatusCodes.Status401Unauthorized, anonymous.StatusCode);
     }

@@ -140,6 +140,31 @@ Agreed while implementing and reviewing PMC-8:
 
 ---
 
+## Change Calculation Decisions (PMC-13)
+
+Confirmed by the PO (PMC-13-P1 to P9). Most of the behaviour already existed since PMC-6; PMC-13 extracts it into a domain service, aligns messages and covers the scenarios:
+
+- **Domain service:** `IChargeCalculationService` / `ChargeCalculationService` (English names per this file, for the story's `ICalculoCobroDomainService`). It is pure (no I/O, registered as singleton) and returns `ChargeCalculation` with the status (`Covered`, `InsufficientFunds`, `ElectronicOverpayment`), the capped `PaymentBreakdown` list, `ChangeGiven` and `Deficit`. `ChargeService` keeps persistence, locking and the outbox.
+- **Change:** `cambio_entregado` = received - amount due, where amount due = `ExpectedTotal + propina`. Electronic payments are applied first and never capped; cash absorbs the excess with `Math.Min(amount, remaining)`, so the sum of `PaymentBreakdown` always equals `Total`.
+- **Electronic overpayment (422):** only when electronic payments on their own exceed the amount due. A mixed payment whose cash produces the change (e.g. card 50 + cash 100 over 120) is valid. `detail`: `"Electronic payments cannot exceed the bill total"` (PMC-13 Gherkin has it in Spanish; the PO decided error texts are in English). Checked in the service before any write; no `.Custom()` rule in `ChargeRequestValidator`, so validation errors stay `400` and the untrusted `detalles_snapshot` is not used for amounts.
+- **Card covering the whole bill plus cash:** the cash contributes nothing, no cash `PaymentBreakdown` row is stored, and the whole cash amount is returned as change.
+- **Not persisted:** neither the change nor the amount received is stored; they are computed in memory and only returned in the response. No entity or migration changes.
+- **Already paid (409):** any previous transaction of the session, including `CANCELADO`, answers `409` with `"The transaction has already been paid"` (consistent with PMC-12-P11). PMC-7 scenario 4 and PMC-13 share this one text on the same endpoint; the PO confirmed it as the definitive one, in English.
+- **Insufficient funds (422):** `detail` is `"Insufficient funds to cover the total"` (PMC-7 scenario 2 has it in Spanish; English by PO decision). The missing amount stays in the `deficit` extension and in `ChargeResult.Deficit`.
+- **Frontend impact:** the `detail` of the `409` and of the two `422` responses changed against `qa` (now fixed English texts). If the Frontend compares them, it must be told; it should rely on the status code and `deficit`.
+- **Database failure (500):** the `IDbContextTransaction` is rolled back and `UseExceptionHandler` answers the standard `500` ProblemDetails without internals.
+- **Precision (RNF-05):** every amount in the calculation, its result and `ChargeResponse.ChangeGiven` is `decimal`; no `float` or `double`.
+- **Tests:** `ChargeCalculationServiceTests` (pure, no database) and `ChangeCalculationTests` (real SQL Server, one test per Gherkin scenario; the `500` is checked through a real `TestServer` pipeline because calling the controller directly skips `UseExceptionHandler`).
+
+
+**PENDING** (not confirmed, to be validated before relying on them):
+
+- **Frontend:** the `detail` texts of the `409` and the two `422` changed; the Frontend still has to be told.
+- **Language of `detail`:** decided by the PO: all error texts are in English, including the ones the stories fix in Spanish (PMC-7 and PMC-13 Gherkin). The success message `"Cobro procesado exitosamente"` is not an error and keeps the contract text.
+- **Same endpoint as PMC-7:** its branch is in peer review and touches the same messages; whoever merges second must keep exactly the English texts above.
+
+---
+
 ## Real-Time Cash Shift Summary Decisions (PMC-9)
 
 Agreed while implementing PMC-9:
@@ -163,7 +188,7 @@ Confirmed with the story owner (Edwing) while implementing PMC-14:
 - **Line and payment order:** `cuerpo` and `pie.pagos` are ordered by `TransactionItem.Id` / `PaymentBreakdown.Id`. `ChargeService` never assigns those ids, so EF Core's SQL Server provider generates them client-side with its sequential GUID generator, in the order the entities are added; that generator is built to sort the same way SQL Server compares `uniqueidentifier`, so `ORDER BY Id` returns the charge order. This is the official ordering mechanism: if any code starts assigning these ids itself (e.g. `Guid.NewGuid()`), add an explicit `Sequence` column set at charge time and order by it instead. Covered by `Lines_and_payments_keep_the_order_they_were_charged_in`.
 - **Coexistence with PMC-11:** `GET /api/v1/pagos/{folio}` (`TransactionDetailService`) is the general transaction detail; `GET /api/v1/pagos/{folio}/ticket-impresion` (`PrintTicketService`) is a contract specialised for the ESC/POS printer. Both read the same persisted history, but the queries stay separate on purpose: each projects only the columns its own DTO needs and the two contracts evolve for different consumers (Frontend vs. printer). Neither endpoint calls the catalogue, orders or any other microservice. PMC-14 does not change the PMC-11 contract.
 - **Tests:** `PrintTicketTests` (service and controller) and `PrintTicketHttpTests` (real HTTP pipeline: `401` without token, `500` without internals on a database timeout, JSON contract as serialized by MVC) run against SQL Server: the former in the shared `payments_tests` database, the latter in `payments_tests_http`.
-- **HTTP integration tests:** `PaymentsApiFactory` (`WebApplicationFactory<Program>`, shared via `IClassFixture`) boots `Program.cs` in the `Testing` environment and swaps only what a test run lacks: the Gateway JWT for `TestAuthHandler` (`X-Test-User` / `X-Test-Roles` headers; no header = anonymous), RabbitMQ for MassTransit's in-memory test harness, and the database for a SQL Server test database of its own (`payments_tests_http`, migrated once by `PaymentsApiFactory.EnsureDatabaseAsync()` before the app starts, so hosted services such as the MassTransit outbox delivery never touch the database other suites use in parallel) with `FailingQueries`, which fails like a timeout any query receiving a chosen parameter value (e.g. a folio). Reuse it for other endpoints instead of building another factory.
+- **HTTP integration tests:** `PaymentsApiFactory` (`WebApplicationFactory<Program>`, shared via `IClassFixture`) boots `Program.cs` in the `Testing` environment and swaps only what a test run lacks: the Gateway JWT for `TestAuthHandler` (`X-Test-User` / `X-Test-Roles` headers; no header = anonymous), RabbitMQ for MassTransit's in-memory test harness, Redis for an in-memory `IDistributedCache` (so a test can seed a pending bill through `PendingBillService`), and the database for a SQL Server test database of its own (`payments_tests_http`, migrated once by `PaymentsApiFactory.EnsureDatabaseAsync()` before the app starts, so hosted services such as the MassTransit outbox delivery never touch the database other suites use in parallel) with `FailingQueries`, which fails like a timeout any query receiving a chosen parameter value (e.g. a folio). Reuse it for other endpoints instead of building another factory.
 
 ---
 
