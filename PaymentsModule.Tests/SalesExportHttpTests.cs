@@ -1,7 +1,9 @@
 using System.Net;
+using System.Text;
 using Microsoft.Extensions.DependencyInjection;
 using PaymentsModule.Data;
 using PaymentsModule.Models;
+using PaymentsModule.Services;
 
 namespace PaymentsModule.Tests;
 
@@ -92,8 +94,9 @@ public class SalesExportHttpTests(PaymentsApiFactory api) : IClassFixture<Paymen
         Assert.DoesNotContain(Header, body);
     }
 
-    // Scenario 3 mid-stream: after the first 500-row chunk went out as a real 200, the database drops. The download
-    // must end in an error on the client (aborted connection), never in a file that looks complete.
+    // Scenario 3 mid-stream: after the first 500-row block went out as a real 200, the database drops at row 701. The
+    // download must end in an error on the client (aborted connection), never in a file that looks complete, and
+    // whatever arrived is made of whole lines: the first block, never part of the second one.
     [Fact]
     public async Task Database_failure_mid_stream_aborts_a_response_that_already_started()
     {
@@ -105,7 +108,37 @@ public class SalesExportHttpTests(PaymentsApiFactory api) : IClassFixture<Paymen
         using var response = await client.GetAsync(Url(start, start.AddDays(1)), HttpCompletionOption.ResponseHeadersRead);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        await Assert.ThrowsAnyAsync<Exception>(() => response.Content.ReadAsStringAsync());
+        var (received, failed) = await ReadUntilEndOrFailureAsync(response);
+        Assert.True(failed, "The aborted download must end in an error, not in a file that looks complete.");
+        var lines = Lines(received);
+        // The test server may drop what was still buffered when the connection is aborted, so nothing at all is also
+        // acceptable; what must never happen is a partial line or rows from the discarded second block.
+        Assert.True(received.Length == 0 || received.EndsWith("\r\n"), "The received body ends in the middle of a line.");
+        Assert.Contains(lines.Length, new[] { 0, 1 + SalesExportService.FlushEvery });
+        Assert.All(lines, l => Assert.Equal(9, l.Split(',').Length));
+    }
+
+    // Reads the body chunk by chunk, keeping what arrived before the connection was cut.
+    private static async Task<(string Received, bool Failed)> ReadUntilEndOrFailureAsync(HttpResponseMessage response)
+    {
+        using var received = new MemoryStream();
+        var buffer = new byte[8 * 1024];
+        var failed = false;
+        try
+        {
+            await using var stream = await response.Content.ReadAsStreamAsync();
+            int read;
+            while ((read = await stream.ReadAsync(buffer)) > 0)
+            {
+                received.Write(buffer, 0, read);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or HttpRequestException or OperationCanceledException)
+        {
+            failed = true;
+        }
+
+        return (Encoding.UTF8.GetString(received.ToArray()), failed);
     }
 
     private static string Url(DateTimeOffset start, DateTimeOffset end) =>
