@@ -6,7 +6,8 @@ public enum ChargeCalculationStatus
 {
     Covered,
     InsufficientFunds,
-    ElectronicOverpayment
+    ElectronicOverpayment,
+    CardCoversFullAmount
 }
 
 /// <summary>
@@ -43,6 +44,13 @@ public class ChargeCalculationService : IChargeCalculationService
         if (electronic > amountDue)
         {
             return new(ChargeCalculationStatus.ElectronicOverpayment, [], 0m, 0m);
+        }
+
+        // PO rule (05/11/2026): if cards fully cover the bill, no additional cash is accepted.
+        var hasCash = received.Any(p => p.Method == PaymentMethod.Cash);
+        if (electronic >= amountDue && hasCash)
+        {
+            return new(ChargeCalculationStatus.CardCoversFullAmount, [], 0m, 0m);
         }
 
         var breakdown = Split(received, amountDue);

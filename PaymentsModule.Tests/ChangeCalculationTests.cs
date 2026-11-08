@@ -118,7 +118,9 @@ public class ChangeCalculationTests : IClassFixture<PaymentsApiFactory>, IAsyncL
         var result = await ControllerChargeAsync(Request(session, new PaymentRequest(card, 160m, "AUTH-1")), cashier);
 
         Assert.Equal(StatusCodes.Status422UnprocessableEntity, result.StatusCode);
-        Assert.Equal("Electronic payments cannot exceed the bill total", Assert.IsType<ProblemDetails>(result.Value).Detail);
+        var error = Assert.IsType<ErrorResponse>(result.Value);
+        Assert.Equal("CARD_AMOUNT_EXCEEDS_BALANCE", error.Code);
+        Assert.Equal("Los pagos con tarjeta no pueden exceder el total de la cuenta", error.Message);
         Assert.Null(await FindAsync(session));
         Assert.Equal(0, await OutboxCountAsync(session));
     }
@@ -131,6 +133,20 @@ public class ChangeCalculationTests : IClassFixture<PaymentsApiFactory>, IAsyncL
         var result = await ChargeAsync(Request(session, Card(PaymentMethod.CreditCard, 100m), Card(PaymentMethod.DebitCard, 60m), Cash(20m)), cashier);
 
         Assert.Equal(ChargeOutcome.ElectronicOverpayment, result.Outcome);
+        Assert.Null(await FindAsync(session));
+    }
+
+    [Fact]
+    public async Task Card_covering_full_amount_with_cash_is_rejected()
+    {
+        var (session, cashier) = await ArrangeAsync(billTotal: 100m);
+
+        var result = await ControllerChargeAsync(Request(session, Card(PaymentMethod.CreditCard, 100m), Cash(50m)), cashier);
+
+        Assert.Equal(StatusCodes.Status422UnprocessableEntity, result.StatusCode);
+        var error = Assert.IsType<ErrorResponse>(result.Value);
+        Assert.Equal("CARD_COVERS_FULL_AMOUNT", error.Code);
+        Assert.Equal("La tarjeta cubre el total; no se admite efectivo adicional", error.Message);
         Assert.Null(await FindAsync(session));
     }
 
@@ -150,14 +166,15 @@ public class ChangeCalculationTests : IClassFixture<PaymentsApiFactory>, IAsyncL
     }
 
     [Fact]
-    public async Task Card_covering_the_bill_returns_all_the_cash_as_change_and_stores_no_cash()
+    public async Task Card_covering_the_bill_alone_is_accepted()
     {
-        // PMC-13-P6.
+        // Card only (no cash) covering the bill is valid.
         var (session, cashier) = await ArrangeAsync(billTotal: 100m);
 
-        var result = await ChargeAsync(Request(session, Card(PaymentMethod.DebitCard, 100m), Cash(50m)), cashier);
+        var result = await ChargeAsync(Request(session, Card(PaymentMethod.DebitCard, 100m)), cashier);
 
-        Assert.Equal(50m, result.Response!.ChangeGiven);
+        Assert.Equal(ChargeOutcome.Completed, result.Outcome);
+        Assert.Equal(0m, result.Response!.ChangeGiven);
         var payment = Assert.Single((await FindAsync(session))!.Payments);
         Assert.Equal((PaymentMethod.DebitCard, 100m), (payment.Method, payment.Amount));
     }
@@ -215,7 +232,9 @@ public class ChangeCalculationTests : IClassFixture<PaymentsApiFactory>, IAsyncL
 
         Assert.Equal(20m, Assert.IsType<ChargeResponse>(first.Value).ChangeGiven);
         Assert.Equal(StatusCodes.Status409Conflict, retry.StatusCode);
-        Assert.Equal("The transaction has already been paid", Assert.IsType<ProblemDetails>(retry.Value).Detail);
+        var error = Assert.IsType<ErrorResponse>(retry.Value);
+        Assert.Equal("TRANSACTION_ALREADY_PAID", error.Code);
+        Assert.Equal("La transacción ya ha sido pagada previamente", error.Message);
         Assert.Equal(1, await CountAsync(session));
         Assert.Single((await FindAsync(session))!.Payments);
     }

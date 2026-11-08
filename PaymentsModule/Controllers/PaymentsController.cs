@@ -16,9 +16,10 @@ public class PaymentsController(ChargeService charges, IValidator<ChargeRequest>
     [ProducesResponseType<ChargeResponse>(StatusCodes.Status201Created)]
     [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
-    [ProducesResponseType<ProblemDetails>(StatusCodes.Status404NotFound)]
-    [ProducesResponseType<ProblemDetails>(StatusCodes.Status409Conflict)]
-    [ProducesResponseType<ProblemDetails>(StatusCodes.Status422UnprocessableEntity)]
+    [ProducesResponseType<ErrorResponse>(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType<ErrorResponse>(StatusCodes.Status404NotFound)]
+    [ProducesResponseType<ErrorResponse>(StatusCodes.Status409Conflict)]
+    [ProducesResponseType<ErrorResponse>(StatusCodes.Status422UnprocessableEntity)]
     public async Task<IActionResult> Charge(ChargeRequest request, CancellationToken ct)
     {
         var validation = await validator.ValidateAsync(request, ct);
@@ -40,21 +41,18 @@ public class PaymentsController(ChargeService charges, IValidator<ChargeRequest>
             return StatusCode(StatusCodes.Status201Created, result.Response);
         }
 
-        var problem = new ProblemDetails
+        // Standard error contract agreed on 05/11/2026: { "code": "STRING_ENUM", "message": "Texto en español" }.
+        var (code, status) = result.Outcome switch
         {
-            Status = result.Outcome switch
-            {
-                ChargeOutcome.AlreadyPaid => StatusCodes.Status409Conflict,
-                ChargeOutcome.BillNotFound => StatusCodes.Status404NotFound,
-                _ => StatusCodes.Status422UnprocessableEntity
-            },
-            Detail = result.Error
+            ChargeOutcome.AlreadyPaid => ("TRANSACTION_ALREADY_PAID", StatusCodes.Status409Conflict),
+            ChargeOutcome.BillNotFound => ("BILL_NOT_FOUND", StatusCodes.Status404NotFound),
+            ChargeOutcome.NoOpenShift => ("CASH_SHIFT_NOT_OPEN", StatusCodes.Status403Forbidden),
+            ChargeOutcome.InsufficientFunds => ("INSUFFICIENT_FUNDS", StatusCodes.Status422UnprocessableEntity),
+            ChargeOutcome.ElectronicOverpayment => ("CARD_AMOUNT_EXCEEDS_BALANCE", StatusCodes.Status422UnprocessableEntity),
+            ChargeOutcome.CardCoversFullAmount => ("CARD_COVERS_FULL_AMOUNT", StatusCodes.Status422UnprocessableEntity),
+            _ => ("UNKNOWN_ERROR", StatusCodes.Status500InternalServerError)
         };
-        if (result.Deficit is { } deficit)
-        {
-            problem.Extensions["deficit"] = deficit;
-        }
 
-        return new ObjectResult(problem) { StatusCode = problem.Status };
+        return new ObjectResult(new ErrorResponse(code, result.Error!, result.Deficit)) { StatusCode = status };
     }
 }

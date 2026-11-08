@@ -14,7 +14,8 @@ public enum ChargeOutcome
     BillNotFound,
     NoOpenShift,
     InsufficientFunds,
-    ElectronicOverpayment
+    ElectronicOverpayment,
+    CardCoversFullAmount
 }
 
 public record ChargeResult(ChargeOutcome Outcome, ChargeResponse? Response = null, string? Error = null, decimal? Deficit = null);
@@ -34,7 +35,7 @@ public class ChargeService(PaymentsDbContext db, PendingBillService bills, IPubl
         var bill = await bills.GetAsync(request.DinningSessionId, ct);
         if (bill is null)
         {
-            return new(ChargeOutcome.BillNotFound, Error: "No pending bill was found for this dinning session.");
+            return new(ChargeOutcome.BillNotFound, Error: "No se encontró una cuenta pendiente para esta sesión.");
         }
 
         var total = bill.Totals.ExpectedTotal + request.Tip;
@@ -42,11 +43,11 @@ public class ChargeService(PaymentsDbContext db, PendingBillService bills, IPubl
         switch (calculation.Status)
         {
             case ChargeCalculationStatus.InsufficientFunds:
-                // The missing amount travels in the "deficit" extension of the ProblemDetails.
-                return new(ChargeOutcome.InsufficientFunds, Error: "Insufficient funds to cover the total", Deficit: calculation.Deficit);
+                return new(ChargeOutcome.InsufficientFunds, Error: "Fondos insuficientes para cubrir el total", Deficit: calculation.Deficit);
             case ChargeCalculationStatus.ElectronicOverpayment:
-                // Rejected before any write; exact text confirmed by the PO (PMC-13-P4).
-                return new(ChargeOutcome.ElectronicOverpayment, Error: "Electronic payments cannot exceed the bill total");
+                return new(ChargeOutcome.ElectronicOverpayment, Error: "Los pagos con tarjeta no pueden exceder el total de la cuenta");
+            case ChargeCalculationStatus.CardCoversFullAmount:
+                return new(ChargeOutcome.CardCoversFullAmount, Error: "La tarjeta cubre el total; no se admite efectivo adicional");
         }
 
         await using var dbTransaction = await db.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
@@ -58,7 +59,7 @@ public class ChargeService(PaymentsDbContext db, PendingBillService bills, IPubl
             .SingleOrDefaultAsync(ct);
         if (shift is null)
         {
-            return new(ChargeOutcome.NoOpenShift, Error: "The cashier has no open cash shift.");
+            return new(ChargeOutcome.NoOpenShift, Error: "Debe abrir caja antes de cobrar.");
         }
 
         var transaction = new PaymentTransaction
@@ -114,5 +115,5 @@ public class ChargeService(PaymentsDbContext db, PendingBillService bills, IPubl
     }
 
     private static ChargeResult AlreadyPaid() =>
-        new(ChargeOutcome.AlreadyPaid, Error: "The transaction has already been paid");
+        new(ChargeOutcome.AlreadyPaid, Error: "La transacción ya ha sido pagada previamente");
 }

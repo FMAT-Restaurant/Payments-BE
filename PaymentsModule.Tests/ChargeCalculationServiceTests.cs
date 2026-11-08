@@ -53,14 +53,26 @@ public class ChargeCalculationServiceTests
     }
 
     [Fact]
-    public void Card_covering_everything_returns_the_whole_cash_as_change()
+    public void Card_covering_everything_without_cash_is_accepted()
     {
-        // PMC-13-P6: the cash contributes nothing to the breakdown and goes back whole.
-        var result = _calculator.Calculate([Card(PaymentMethod.CreditCard, 100m), Cash(50m)], 100m);
+        // Card alone covering the bill is a valid payment.
+        var result = _calculator.Calculate([Card(PaymentMethod.CreditCard, 100m)], 100m);
 
-        Assert.Equal((ChargeCalculationStatus.Covered, 50m), (result.Status, result.ChangeGiven));
+        Assert.Equal(ChargeCalculationStatus.Covered, result.Status);
+        Assert.Equal(0m, result.ChangeGiven);
         var card = Assert.Single(result.Breakdown);
         Assert.Equal((PaymentMethod.CreditCard, 100m), (card.Method, card.Amount));
+    }
+
+    [Fact]
+    public void Card_covering_everything_with_cash_is_rejected()
+    {
+        // PO rule 05/11/2026: if cards fully cover the bill, additional cash is not accepted.
+        var result = _calculator.Calculate([Card(PaymentMethod.CreditCard, 100m), Cash(50m)], 100m);
+
+        Assert.Equal(ChargeCalculationStatus.CardCoversFullAmount, result.Status);
+        Assert.Empty(result.Breakdown);
+        Assert.Equal(0m, result.ChangeGiven);
     }
 
     [Theory]
@@ -81,6 +93,15 @@ public class ChargeCalculationServiceTests
         var result = _calculator.Calculate([Card(PaymentMethod.CreditCard, 80m), Card(PaymentMethod.DebitCard, 80m), Cash(10m)], 150m);
 
         Assert.Equal(ChargeCalculationStatus.ElectronicOverpayment, result.Status);
+    }
+
+    [Fact]
+    public void Several_cards_covering_the_total_with_cash_are_rejected()
+    {
+        // Two cards summing to the exact total + unnecessary cash.
+        var result = _calculator.Calculate([Card(PaymentMethod.CreditCard, 50m), Card(PaymentMethod.DebitCard, 50m), Cash(20m)], 100m);
+
+        Assert.Equal(ChargeCalculationStatus.CardCoversFullAmount, result.Status);
     }
 
     [Fact]
@@ -138,10 +159,10 @@ public class ChargeCalculationServiceTests
         for (var i = 0; i < 25; i++)
         {
             var cards = Enumerable.Range(0, random.Next(0, 3)).Select(_ => Cents(random, 1, 20_000)).ToArray();
-            var due = cards.Sum() + Cents(random, 0, 50_000);
+            var due = cards.Sum() + Cents(random, 1, 50_000);
+            // Cash covers what the cards leave, plus some change. Cards never fully cover the bill here.
             var missing = due - cards.Sum();
-            // Enough cash to cover what the cards leave, plus some change.
-            var cash = missing == 0m ? Array.Empty<decimal>() : new[] { missing + Cents(random, 0, 10_000) };
+            var cash = new[] { missing + Cents(random, 0, 10_000) };
             data.Add(cash, cards, due);
         }
 
