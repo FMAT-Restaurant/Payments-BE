@@ -177,8 +177,9 @@ public class SalesExportTests : IAsyncLifetime
         var export = await ExportAsync(start, start.AddMonths(3));
 
         var badRequest = Assert.IsType<BadRequestObjectResult>(export.Result);
-        var problem = Assert.IsType<ValidationProblemDetails>(badRequest.Value);
-        Assert.Equal(new[] { "The date range cannot exceed 31 days." }, problem.Errors["fin"]);
+        var error = Assert.IsType<ErrorResponse>(badRequest.Value);
+        Assert.Equal(ErrorResponse.ValidationErrorCode, error.Code);
+        Assert.Equal("El rango de fechas no puede exceder los 31 días.", error.Message);
         Assert.Equal(0, _probe.Commands);
         Assert.Equal(string.Empty, export.Body);
     }
@@ -188,9 +189,9 @@ public class SalesExportTests : IAsyncLifetime
     {
         var export = await ExportAsync(null, null);
 
-        var problem = Assert.IsType<ValidationProblemDetails>(Assert.IsType<BadRequestObjectResult>(export.Result).Value);
-        Assert.Contains("inicio", problem.Errors.Keys);
-        Assert.Contains("fin", problem.Errors.Keys);
+        var error = Assert.IsType<ErrorResponse>(Assert.IsType<BadRequestObjectResult>(export.Result).Value);
+        Assert.Contains("inicio", error.Message);
+        Assert.Contains("fin", error.Message);
     }
 
     [Theory]

@@ -146,21 +146,33 @@ Confirmed by the PO (PMC-13-P1 to P9). Most of the behaviour already existed sin
 
 - **Domain service:** `IChargeCalculationService` / `ChargeCalculationService` (English names per this file, for the story's `ICalculoCobroDomainService`). It is pure (no I/O, registered as singleton) and returns `ChargeCalculation` with the status (`Covered`, `InsufficientFunds`, `ElectronicOverpayment`), the capped `PaymentBreakdown` list, `ChangeGiven` and `Deficit`. `ChargeService` keeps persistence, locking and the outbox.
 - **Change:** `cambio_entregado` = cash - (amount due - card), where amount due = `ExpectedTotal + propina`. Electronic payments are applied first and never capped; cash absorbs the excess with `Math.Min(amount, remaining)`, so the sum of `PaymentBreakdown` always equals `Total`.
-- **Error contract (PO agreement, 2026-11-05):** business errors of `POST` charge return `ErrorResponse` `{ "code": "STRING_ENUM", "message": "Texto en español" }` instead of `ProblemDetails`. Validation errors stay `400` `ValidationProblemDetails` and unhandled failures stay the standard `500` ProblemDetails. This supersedes the earlier decision of English `detail` texts.
+- **Error contract (PO agreement, 2026-11-05):** business errors of `POST` charge return `ErrorResponse` `{ "code": "STRING_ENUM", "message": "Texto en español" }` instead of `ProblemDetails`. `400` and `500` follow the same contract (see Cross-cutting API Contract). This supersedes the earlier decision of English `detail` texts.
 - **Codes:** `TRANSACTION_ALREADY_PAID` (409, `"La transacción ya ha sido pagada previamente"`), `BILL_NOT_FOUND` (404), `CASH_SHIFT_NOT_OPEN` (403, `"Debe abrir caja antes de cobrar"`), `INSUFFICIENT_FUNDS` (422, `"El monto de los pagos no cubre el total de la cuenta"`, plus a `deficit` field present only for this code), `CARD_AMOUNT_EXCEEDS_BALANCE` (422, `"Los pagos con tarjeta no pueden exceder el total de la cuenta"`), `CARD_COVERS_FULL_AMOUNT` (422, `"La tarjeta cubre el total; no se admite efectivo adicional"`).
 - **Electronic overpayment (422 `CARD_AMOUNT_EXCEEDS_BALANCE`):** only when electronic payments on their own exceed the amount due. A mixed payment whose cash produces the change (e.g. card 50 + cash 100 over 120) is valid. Checked in the service before any write; no `.Custom()` rule in `ChargeRequestValidator`, so validation errors stay `400` and the untrusted `detalles_snapshot` is not used for amounts.
 - **Card covering the whole bill plus cash (422 `CARD_COVERS_FULL_AMOUNT`):** if electronic payments alone cover the amount due and any cash payment is sent, the charge is rejected before any write. A card-only payment covering the bill is valid with `cambio_entregado = 0`.
 - **Not persisted:** neither the change nor the amount received is stored; they are computed in memory and only returned in the response. No entity or migration changes (PMC-6 adecuaciones will persist `ChangeGiven`).
 - **Already paid (409):** any previous transaction of the session, including `CANCELADO`, answers `409 TRANSACTION_ALREADY_PAID`.
 - **Frontend impact:** the body of the `403`/`404`/`409`/`422` responses changed shape (`ErrorResponse`) and a missing open shift is now `403` instead of `422`. The Frontend must rely on `code` (and `deficit`), never on `message`.
-- **Database failure (500):** the `IDbContextTransaction` is rolled back and `UseExceptionHandler` answers the standard `500` ProblemDetails without internals.
+- **Database failure (500):** the `IDbContextTransaction` is rolled back and `UseExceptionHandler` answers `500` `INTERNAL_ERROR` without internals.
 - **Precision (RNF-05):** every amount in the calculation, its result and `ChargeResponse.ChangeGiven` is `decimal`; no `float` or `double`.
 - **Tests:** `ChargeCalculationServiceTests` (pure, no database) and `ChangeCalculationTests` (real SQL Server, one test per Gherkin scenario; the `500` is checked through a real `TestServer` pipeline because calling the controller directly skips `UseExceptionHandler`).
 
 **PENDING:**
 
 - **Frontend:** has to be told about the new error body and the `403` before PR #13 reaches `qa`.
-- **Other endpoints:** still answer `ProblemDetails`; they move to `ErrorResponse` in their own adecuaciones (Fases 2-3 of the plan).
+
+---
+
+## Cross-cutting API Contract (PO agreement, 2026-11-05)
+
+Applies to every endpoint and supersedes the routes and `ProblemDetails` bodies mentioned in the story sections above and below:
+
+- **Routes:** everything lives under `/api/v1/payments`: `POST /charge`, `POST /cash-shifts/open`, `POST /cash-shifts/close`, `GET /cash-shifts/summary`, `GET /` (history), `GET /{folio}` (detail), `GET /{folio}/ticket` (print), `GET /export`. Literal segments (`charge`, `export`, `cash-shifts`) win over `{folio}`. Query parameter names (`inicio`/`fin`, `fecha_inicio`, ...) and JSON field names move to English in each story's own adecuacion.
+- **Errors:** every non-2xx body with content is `ErrorResponse` `{ "code", "message" }` with the message in Spanish; the Frontend relies on `code` only.
+  - `400 VALIDATION_ERROR`: FluentValidation messages joined in one string (`ErrorResponse.Validation`), built-in texts in Spanish (`LanguageManager.Culture = es`) naming the wire field (`DisplayNameResolver` reads `[JsonPropertyName]`); malformed JSON answers `"La solicitud tiene un formato inválido."` (`InvalidModelStateResponseFactory`).
+  - `500 INTERNAL_ERROR`: `UseExceptionHandler` answers `"Ocurrió un error interno. Intente de nuevo más tarde."` without internals.
+  - `404 TRANSACTION_NOT_FOUND` (`"El ticket '{folio}' no existe"`) for detail and print; cash shifts answer `404 CASH_SHIFT_NOT_OPEN` (summary), `409 CASH_SHIFT_ALREADY_OPEN` (open) and `422 CASH_SHIFT_NOT_OPEN` (close).
+  - `401`/`403` from the authentication middleware still have an empty body; `FORBIDDEN_ROLE` arrives with PMC-16/PMC-32.
 
 ---
 

@@ -49,10 +49,11 @@ public class TransactionDetailTests : IAsyncLifetime
         await using var db = QueriesDatabase.CreateContext();
         var controller = new TransactionDetailController(new TransactionDetailService(db));
 
-        var missing = Assert.IsType<ObjectResult>(await controller.GetByFolio("TX-99999", CancellationToken.None));
+        var missing = Assert.IsType<NotFoundObjectResult>(await controller.GetByFolio("TX-99999", CancellationToken.None));
         var found = Assert.IsType<OkObjectResult>(await controller.GetByFolio("TX-20260901-000001", CancellationToken.None));
 
         Assert.Equal(StatusCodes.Status404NotFound, missing.StatusCode);
+        Assert.Equal("TRANSACTION_NOT_FOUND", Assert.IsType<ErrorResponse>(missing.Value).Code);
         Assert.IsType<TransactionDetailResponse>(found.Value);
     }
 
