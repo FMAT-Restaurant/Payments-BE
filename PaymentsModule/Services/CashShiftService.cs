@@ -54,6 +54,20 @@ public class CashShiftService(PaymentsDbContext db)
         return new ActiveCashShiftResponse(shift.Id, shift.OpenedAt, shift.InitialFund);
     }
 
+    /// <summary>Lists all cash shifts currently open for supervision, ordered by opening time ascending.</summary>
+    public async Task<IReadOnlyList<OpenShiftListItemResponse>> GetOpenShiftsAsync(CancellationToken ct = default)
+    {
+        return await db.CashShifts.AsNoTracking()
+            .Where(s => s.Status == CashShiftStatus.Open)
+            .OrderBy(s => s.OpenedAt)
+            .Select(s => new OpenShiftListItemResponse(
+                s.Id,
+                s.CashierId,
+                s.OpenedAt,
+                s.InitialFund))
+            .ToListAsync(ct);
+    }
+
     /// <summary>Calculates the real-time income summary for the cashier's active open shift without modifying state.</summary>
     public async Task<ShiftSummaryResult> GetSummaryAsync(string cashierId, CancellationToken ct = default)
     {

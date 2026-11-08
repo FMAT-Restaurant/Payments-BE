@@ -712,6 +712,61 @@ public class CashShiftServiceTests : IAsyncLifetime
         Assert.Equal("FORBIDDEN_ROLE", error.Code);
     }
 
+    [Fact]
+    public async Task Get_open_shifts_returns_open_shifts_ordered_by_opened_at_ascending()
+    {
+        var cashier1 = NewCashier();
+        var cashier2 = NewCashier();
+        var opened1 = await OpenAsync(new OpenCashShiftRequest(500.00m), cashier1);
+        await Task.Delay(20);
+        var opened2 = await OpenAsync(new OpenCashShiftRequest(750.00m), cashier2);
+
+        var list = await GetOpenShiftsAsync();
+
+        Assert.NotEmpty(list);
+        var first = list.First(s => s.CashShiftId == opened1.Response!.CashShiftId);
+        var second = list.First(s => s.CashShiftId == opened2.Response!.CashShiftId);
+        Assert.Equal(cashier1, first.CashierName);
+        Assert.Equal(500.00m, first.OpeningFloat);
+        Assert.Equal(cashier2, second.CashierName);
+        Assert.Equal(750.00m, second.OpeningFloat);
+        Assert.True(first.OpenedAt <= second.OpenedAt);
+    }
+
+    [Fact]
+    public async Task Get_open_shifts_excludes_closed_shifts()
+    {
+        var cashier = NewCashier();
+        var opened = await OpenAsync(new OpenCashShiftRequest(500.00m), cashier);
+        await CloseAsync(new CloseCashShiftRequest(500.00m), cashier);
+
+        var list = await GetOpenShiftsAsync();
+
+        Assert.DoesNotContain(list, s => s.CashShiftId == opened.Response!.CashShiftId);
+    }
+
+    [Theory]
+    [InlineData("Administrador", StatusCodes.Status200OK)]
+    [InlineData("Gerente", StatusCodes.Status200OK)]
+    [InlineData("Admin", StatusCodes.Status200OK)]
+    public async Task Controller_get_open_shifts_authorizes_management_roles(string role, int expectedStatus)
+    {
+        var result = await ControllerGetOpenShiftsAsync(role);
+
+        Assert.Equal(expectedStatus, result.StatusCode);
+        Assert.IsAssignableFrom<IEnumerable<OpenShiftListItemResponse>>(result.Value);
+    }
+
+    [Fact]
+    public async Task Controller_get_open_shifts_rejects_cajero_with_403_forbidden_role()
+    {
+        var result = await ControllerGetOpenShiftsAsync(role: "Cajero");
+
+        Assert.Equal(StatusCodes.Status403Forbidden, result.StatusCode);
+        var error = Assert.IsType<ErrorResponse>(result.Value);
+        Assert.Equal("FORBIDDEN_ROLE", error.Code);
+    }
+
     private static string NewCashier() => $"cashier-{Guid.NewGuid()}";
 
     private async Task<ShiftSummaryResult> GetSummaryAsync(string cashierId)
@@ -730,6 +785,12 @@ public class CashShiftServiceTests : IAsyncLifetime
     {
         await using var scope = _provider.CreateAsyncScope();
         return await scope.ServiceProvider.GetRequiredService<CashShiftService>().GetActiveShiftAsync(cashierId);
+    }
+
+    private async Task<IReadOnlyList<OpenShiftListItemResponse>> GetOpenShiftsAsync()
+    {
+        await using var scope = _provider.CreateAsyncScope();
+        return await scope.ServiceProvider.GetRequiredService<CashShiftService>().GetOpenShiftsAsync();
     }
 
     private async Task<OpenShiftResult> OpenAsync(OpenCashShiftRequest request, string cashierId)
@@ -785,6 +846,13 @@ public class CashShiftServiceTests : IAsyncLifetime
         await using var scope = _provider.CreateAsyncScope();
         var controller = CreateController(scope.ServiceProvider, cashierId, role);
         return ToObjectResult(await controller.GetMyActiveShift(CancellationToken.None));
+    }
+
+    private async Task<ObjectResult> ControllerGetOpenShiftsAsync(string? role = "Administrador", string? cashierId = "supervisor-user")
+    {
+        await using var scope = _provider.CreateAsyncScope();
+        var controller = CreateController(scope.ServiceProvider, cashierId, role);
+        return ToObjectResult(await controller.GetOpenShifts(CancellationToken.None));
     }
 
     private async Task<ObjectResult> ControllerGetSummaryByIdAsync(string cashShiftId, string? role = "Administrador", string? cashierId = "supervisor-user")

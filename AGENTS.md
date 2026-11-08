@@ -167,7 +167,7 @@ Confirmed by the PO (PMC-13-P1 to P9). Most of the behaviour already existed sin
 
 Applies to every endpoint and supersedes the routes and `ProblemDetails` bodies mentioned in the story sections above and below:
 
-- **Routes:** everything lives under `/api/v1/payments`: `POST /charge`, `POST /cash-shifts/open`, `POST /cash-shifts/close`, `GET /cash-shifts/me`, `GET /cash-shifts/summary`, `GET /cash-shifts/{cash_shift_id}/summary`, `GET /` (history), `GET /{folio}` (detail), `GET /{folio}/ticket` (print), `GET /export`. Literal segments (`charge`, `export`, `cash-shifts`) win over `{folio}`. Query parameter names (`inicio`/`fin`, `fecha_inicio`, ...) and JSON field names move to English in each story's own adecuacion.
+- **Routes:** everything lives under `/api/v1/payments`: `POST /charge`, `POST /cash-shifts/open`, `GET /cash-shifts/open`, `POST /cash-shifts/close`, `GET /cash-shifts/me`, `GET /cash-shifts/summary`, `GET /cash-shifts/{cash_shift_id}/summary`, `GET /` (history), `GET /{folio}` (detail), `GET /{folio}/ticket` (print), `GET /export`. Literal segments (`charge`, `export`, `cash-shifts`) win over `{folio}`. Query parameter names (`inicio`/`fin`, `fecha_inicio`, ...) and JSON field names move to English in each story's own adecuacion.
 - **Errors:** every non-2xx body with content is `ErrorResponse` `{ "code", "message" }` with the message in Spanish; the Frontend relies on `code` only.
   - `400 VALIDATION_ERROR`: FluentValidation messages joined in one string (`ErrorResponse.Validation`), built-in texts in Spanish (`LanguageManager.Culture = es`) naming the wire field (`DisplayNameResolver` reads `[JsonPropertyName]`); malformed JSON answers `"La solicitud tiene un formato inválido."` (`InvalidModelStateResponseFactory`).
   - `500 INTERNAL_ERROR`: `UseExceptionHandler` answers `"Ocurrió un error interno. Intente de nuevo más tarde."` without internals.
@@ -244,6 +244,19 @@ Agreed while implementing the active operational shift query for the logged-in u
 - **No open shift response (404 Not Found):** if the user has no shift or only closed/unbalanced shifts, returns `404 Not Found` with `{ "code": "CASH_SHIFT_NOT_OPEN", "message": "No hay un turno de caja abierto para este usuario" }`. The Frontend intercepts this status code to trigger the modal for opening a shift and declaring initial cash without receiving generic 500 errors.
 - **Integrity and concurrency:** guaranteed by the filtered unique index `IX_CashShifts_CashierId` (`WHERE [Status] = 'Open'`), ensuring a cashier cannot have more than one open shift concurrently. Read queries use `AsNoTracking()` under statement-level snapshot isolation (RCSI).
 - **Tests:** unit tests in `CashShiftServiceTests` and HTTP integration tests in `ActiveCashShiftHttpTests` covering 200 with snake_case contract, 404 for closed/inexistent shifts, 401 without token, 403 on unauthorized roles, and strict JWT extraction ignoring query params and client headers.
+
+---
+
+## Open Cash Shifts for Supervision Decisions (PMC-30 / HU-FE-09)
+
+Agreed while implementing the open cash shifts listing for supervision:
+
+- **Route and roles:** `GET /api/v1/payments/cash-shifts/open` is protected with `[Authorize]` and exclusively restricted to supervisor roles (`Administrador`, `Gerente`, and `Admin`). Requests without token return `401 Unauthorized`. Callers with unauthorized roles (such as `Cajero`) receive `403 FORBIDDEN_ROLE` with error response body `{ "code": "FORBIDDEN_ROLE", "message": "No tiene permisos para realizar esta acción." }`.
+- **Query performance & lightness:** selects from `CashShifts` filtering strictly by `Status == CashShiftStatus.Open` using `.AsNoTracking()`. Does not calculate real-time sales or totals (delegated to individual summary endpoints). Orders results chronologically by opening time ascending (`OrderBy(s => s.OpenedAt)`).
+- **Response contract (200 OK):** returns a JSON array in strict snake_case:
+  `[ { "cash_shift_id": "...", "cashier_name": "...", "opened_at": "...", "opening_float": 1000.00 } ]`. If no open shifts exist, returns `200 OK` with an empty array `[]`.
+- **Coexistence with shift open POST:** `GET /cash-shifts/open` coexists cleanly with `POST /cash-shifts/open` on the same route distinguished by HTTP verb.
+- **Tests:** unit tests in `CashShiftServiceTests` and HTTP pipeline integration tests in `OpenCashShiftsHttpTests` using `PaymentsApiFactory` (`payments_tests_http`), verifying 200 with chronological ordering, empty list when none open, 403 on `Cajero`, 401 without token, and snake_case DTO contract.
 
 ---
 

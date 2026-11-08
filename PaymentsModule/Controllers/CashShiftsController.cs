@@ -97,6 +97,23 @@ public class CashShiftsController(
         return NotFound(ErrorResponse.CashShiftNotFound());
     }
 
+    [HttpGet("open")]
+    [ProducesResponseType<IReadOnlyList<OpenShiftListItemResponse>>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType<ErrorResponse>(StatusCodes.Status403Forbidden)]
+    public async Task<IActionResult> GetOpenShifts(CancellationToken ct)
+    {
+        // Only Administrador, Gerente, and Admin roles can access the supervisor open shifts list (PMC-30).
+        if (!User.IsInRole("Administrador") && !User.IsInRole("Gerente") && !User.IsInRole("Admin"))
+        {
+            return StatusCode(StatusCodes.Status403Forbidden,
+                new ErrorResponse("FORBIDDEN_ROLE", "No tiene permisos para realizar esta acción."));
+        }
+
+        var openShifts = await shifts.GetOpenShiftsAsync(ct);
+        return Ok(openShifts);
+    }
+
     [HttpPost("open")]
     [ProducesResponseType<OpenCashShiftResponse>(StatusCodes.Status201Created)]
     [ProducesResponseType<ErrorResponse>(StatusCodes.Status400BadRequest)]

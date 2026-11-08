@@ -61,3 +61,9 @@ public record ActiveCashShiftResponse(
     [property: JsonPropertyName("cash_shift_id")] Guid CashShiftId,
     [property: JsonPropertyName("opened_at")] DateTimeOffset OpenedAt,
     [property: JsonPropertyName("opening_float")] decimal OpeningFloat);
+
+public record OpenShiftListItemResponse(
+    [property: JsonPropertyName("cash_shift_id")] Guid CashShiftId,
+    [property: JsonPropertyName("cashier_name")] string CashierName,
+    [property: JsonPropertyName("opened_at")] DateTimeOffset OpenedAt,
+    [property: JsonPropertyName("opening_float")] decimal OpeningFloat);
