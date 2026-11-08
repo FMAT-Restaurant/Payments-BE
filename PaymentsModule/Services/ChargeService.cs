@@ -43,7 +43,7 @@ public class ChargeService(PaymentsDbContext db, PendingBillService bills, IPubl
         switch (calculation.Status)
         {
             case ChargeCalculationStatus.InsufficientFunds:
-                return new(ChargeOutcome.InsufficientFunds, Error: "Fondos insuficientes para cubrir el total", Deficit: calculation.Deficit);
+                return new(ChargeOutcome.InsufficientFunds, Error: "El monto de los pagos no cubre el total de la cuenta", Deficit: calculation.Deficit);
             case ChargeCalculationStatus.ElectronicOverpayment:
                 return new(ChargeOutcome.ElectronicOverpayment, Error: "Los pagos con tarjeta no pueden exceder el total de la cuenta");
             case ChargeCalculationStatus.CardCoversFullAmount:
@@ -59,7 +59,7 @@ public class ChargeService(PaymentsDbContext db, PendingBillService bills, IPubl
             .SingleOrDefaultAsync(ct);
         if (shift is null)
         {
-            return new(ChargeOutcome.NoOpenShift, Error: "Debe abrir caja antes de cobrar.");
+            return new(ChargeOutcome.NoOpenShift, Error: "Debe abrir caja antes de cobrar");
         }
 
         var transaction = new PaymentTransaction

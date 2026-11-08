@@ -255,7 +255,7 @@ public class ChargeServiceTests : IAsyncLifetime
         Assert.Equal(StatusCodes.Status422UnprocessableEntity, insufficient.StatusCode);
         var insufficientError = Assert.IsType<ErrorResponse>(insufficient.Value);
         Assert.Equal("INSUFFICIENT_FUNDS", insufficientError.Code);
-        Assert.Equal("Fondos insuficientes para cubrir el total", insufficientError.Message);
+        Assert.Equal("El monto de los pagos no cubre el total de la cuenta", insufficientError.Message);
         Assert.Equal(50m, insufficientError.Deficit);
 
         // 409 TRANSACTION_ALREADY_PAID
