@@ -17,7 +17,7 @@ public class SalesExportQueryValidator : AbstractValidator<SalesExportQuery>
         When(x => x.Start.HasValue && x.End.HasValue, () =>
         {
             RuleFor(x => x.End)
-                .Must((query, end) => end >= query.Start)
+                .Must((query, end) => end > query.Start)
                 .WithMessage("El rango de fechas no es válido: inicio no puede ser posterior a fin.")
                 .Must((query, end) => end - query.Start <= MaxRange)
                 .WithMessage("El rango de fechas no puede exceder los 31 días.")

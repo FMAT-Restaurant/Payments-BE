@@ -30,6 +30,14 @@ public enum ShiftSummaryOutcome
 
 public record ShiftSummaryResult(ShiftSummaryOutcome Outcome, CashShiftSummaryResponse? Response = null, string? Error = null);
 
+public enum ShiftSummaryByIdOutcome
+{
+    Found,
+    NotFound
+}
+
+public record ShiftSummaryByIdResult(ShiftSummaryByIdOutcome Outcome, CashShiftSummaryResponse? Response = null, string? Error = null);
+
 public class CashShiftService(PaymentsDbContext db)
 {
     /// <summary>Calculates the real-time income summary for the cashier's active open shift without modifying state.</summary>
@@ -42,16 +50,36 @@ public class CashShiftService(PaymentsDbContext db)
             return new(ShiftSummaryOutcome.NoOpenShift, Error: "No hay un turno de caja abierto para este usuario");
         }
 
+        var response = await BuildSummaryResponseAsync(shift, ct);
+        return new(ShiftSummaryOutcome.Found, response);
+    }
+
+    /// <summary>Calculates the income summary for any cash shift by its id for supervision, without modifying state.</summary>
+    public async Task<ShiftSummaryByIdResult> GetSummaryByIdAsync(Guid shiftId, CancellationToken ct = default)
+    {
+        var shift = await db.CashShifts.AsNoTracking()
+            .SingleOrDefaultAsync(s => s.Id == shiftId, ct);
+        if (shift is null)
+        {
+            return new(ShiftSummaryByIdOutcome.NotFound, Error: "El turno de caja no existe");
+        }
+
+        var response = await BuildSummaryResponseAsync(shift, ct);
+        return new(ShiftSummaryByIdOutcome.Found, response);
+    }
+
+    private async Task<CashShiftSummaryResponse> BuildSummaryResponseAsync(CashShift shift, CancellationToken ct)
+    {
         var (cashSales, cardTotal, _) = await CalculateShiftTotalsAsync(shift.Id, ct);
         var expectedCash = shift.InitialFund + cashSales;
 
-        return new(ShiftSummaryOutcome.Found, new CashShiftSummaryResponse(
+        return new CashShiftSummaryResponse(
             shift.Id,
             shift.Status,
             shift.InitialFund,
             new CashShiftIncomeBreakdown(cashSales, cardTotal),
             expectedCash,
-            DateTimeOffset.UtcNow));
+            shift.ClosedAt ?? DateTimeOffset.UtcNow);
     }
 
     /// <summary>Opens a new cash shift for the cashier. <paramref name="cashierId"/> must come from the caller's JWT, never from the payload.</summary>

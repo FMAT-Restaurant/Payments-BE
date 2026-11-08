@@ -167,12 +167,12 @@ Confirmed by the PO (PMC-13-P1 to P9). Most of the behaviour already existed sin
 
 Applies to every endpoint and supersedes the routes and `ProblemDetails` bodies mentioned in the story sections above and below:
 
-- **Routes:** everything lives under `/api/v1/payments`: `POST /charge`, `POST /cash-shifts/open`, `POST /cash-shifts/close`, `GET /cash-shifts/summary`, `GET /` (history), `GET /{folio}` (detail), `GET /{folio}/ticket` (print), `GET /export`. Literal segments (`charge`, `export`, `cash-shifts`) win over `{folio}`. Query parameter names (`inicio`/`fin`, `fecha_inicio`, ...) and JSON field names move to English in each story's own adecuacion.
+- **Routes:** everything lives under `/api/v1/payments`: `POST /charge`, `POST /cash-shifts/open`, `POST /cash-shifts/close`, `GET /cash-shifts/summary`, `GET /cash-shifts/{cash_shift_id}/summary`, `GET /` (history), `GET /{folio}` (detail), `GET /{folio}/ticket` (print), `GET /export`. Literal segments (`charge`, `export`, `cash-shifts`) win over `{folio}`. Query parameter names (`inicio`/`fin`, `fecha_inicio`, ...) and JSON field names move to English in each story's own adecuacion.
 - **Errors:** every non-2xx body with content is `ErrorResponse` `{ "code", "message" }` with the message in Spanish; the Frontend relies on `code` only.
   - `400 VALIDATION_ERROR`: FluentValidation messages joined in one string (`ErrorResponse.Validation`), built-in texts in Spanish (`LanguageManager.Culture = es`) naming the wire field (`DisplayNameResolver` reads `[JsonPropertyName]`); malformed JSON answers `"La solicitud tiene un formato inválido."` (`InvalidModelStateResponseFactory`).
   - `500 INTERNAL_ERROR`: `UseExceptionHandler` answers `"Ocurrió un error interno. Intente de nuevo más tarde."` without internals.
-  - `404 TRANSACTION_NOT_FOUND` (`"El ticket '{folio}' no existe"`) for detail and print; cash shifts answer `404 CASH_SHIFT_NOT_OPEN` (summary), `409 CASH_SHIFT_ALREADY_OPEN` (open) and `422 CASH_SHIFT_NOT_OPEN` (close).
-  - `401`/`403` from the authentication middleware still have an empty body; `FORBIDDEN_ROLE` arrives with PMC-16/PMC-32.
+  - `404 TRANSACTION_NOT_FOUND` (`"El ticket '{folio}' no existe"`) for detail and print; cash shifts answer `404 CASH_SHIFT_NOT_OPEN` (cashier summary), `404 CASH_SHIFT_NOT_FOUND` (`"El turno de caja no existe"`, supervision summary by id), `409 CASH_SHIFT_ALREADY_OPEN` (open) and `422 CASH_SHIFT_NOT_OPEN` (close).
+  - `401` and framework-level challenges still have an empty body; `403 FORBIDDEN_ROLE` with `{ code, message }` is returned for unauthorized supervisor access (PMC-31 / PMC-16).
 
 ---
 
@@ -216,6 +216,20 @@ Taken while implementing PMC-15; pending confirmation with the story owner where
 - **Failure mid-stream:** the controller logs the error and calls `HttpContext.Abort()` so the client gets an incomplete download, never a file that looks finished. What the client received is always whole blocks of lines: the block being built when the database drops is discarded, never half written right before the abort. A failure before the response starts goes to the global exception handler (`500`): `WriteCsvAsync` reads the first row before anything else and the response does not start until the first block of 500 rows is complete, so a failure opening the query or within the first block leaves with zero bytes sent.
 - **Isolation:** the default SQL Server `READ COMMITTED` level, so uncommitted sales are never read. No calls to other microservices during the export.
 - **Tests:** `SalesExportTests` run against the same SQL Server test database, each test in its own date window. `SalesExportHttpTests` go through the real HTTP pipeline with `PaymentsApiFactory` (`payments_tests_http`): `200` for `Administrador`, `401` without token, `403` for a cashier role, `400` with the English message, `500` without internals when the query fails before anything is sent, and an aborted download when it fails after the first chunk (`FailingQueries.FailReadsAfter`).
+
+---
+
+## Supervision Cash Shift Summary by Id Decisions (PMC-31 / PMC-16)
+
+Agreed while implementing the supervision cash shift summary by id:
+
+- **Route and roles:** `GET /api/v1/payments/cash-shifts/{cash_shift_id}/summary` is restricted to supervisor roles (`Administrador`, `Gerente`, and `Admin`). A cashier (`Cajero`) or any role without supervision permissions receives `403 FORBIDDEN_ROLE` with error body `{ "code": "FORBIDDEN_ROLE", "message": "No tiene permisos para realizar esta acción." }`. A request without a token returns `401 Unauthorized`. Caller identity is extracted exclusively from the JWT claims forwarded by the API Gateway; user IDs are never accepted in headers or request bodies.
+- **Input validation:** `cash_shift_id` must be a valid, non-empty GUID. Non-GUID strings (e.g. `abc`) or empty GUIDs (`00000000-0000-0000-0000-000000000000`) return `400 VALIDATION_ERROR` with message `"El id del turno de caja tiene un formato inválido."` before touching the database.
+- **Non-existent shift:** when no cash shift exists with the provided `cash_shift_id`, the endpoint returns `404 CASH_SHIFT_NOT_FOUND` with message `"El turno de caja no existe"`. The error response helper `ErrorResponse.CashShiftNotFound()` is added to the shared error catalogue.
+- **Closed and unbalanced shifts:** if the shift is already closed (`CERRADO` / `CashShiftStatus.Closed` or `DESCUADRADO` / `CashShiftStatus.Unbalanced`), the endpoint returns `200 OK` with the final arqueo of that shift and its corresponding status (PO decision, replacing the proposed `409 CASH_SHIFT_CLOSED`).
+- **Calculation reuse and non-blocking reads (RCSI):** reuses the same SQL aggregation (`CalculateShiftTotalsAsync`) shared between PMC-9 and PMC-8 close reconciliation. Calculates `expected_cash = initial_fund + efectivo recibido − change_given` (with card totalized separately and tips deducted from drawer cash). Pure read-only projection (`AsNoTracking()`) under statement-level snapshot isolation (RCSI), ensuring it does not lock or block concurrent charges in progress on the queried shift.
+- **Parity and coherence with PMC-9:** for an active open shift, the owner cashier calling `GET /api/v1/payments/cash-shifts/summary` and a supervisor calling `GET /api/v1/payments/cash-shifts/{cash_shift_id}/summary` receive identical financial amounts in the shared response contract `CashShiftSummaryResponse`.
+- **Tests:** unit tests in `CashShiftServiceTests` and HTTP pipeline integration tests in `CashShiftSummaryByIdHttpTests` using `PaymentsApiFactory` (`payments_tests_http`), covering open shifts (200), closed shifts (200), unbalanced shifts (200), non-existent shifts (404), cashier forbidden (403), unauthorized (401), invalid GUID format (400), and full parity with PMC-9.
 
 ---
 

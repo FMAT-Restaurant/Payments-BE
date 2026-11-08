@@ -20,6 +20,10 @@ public record ErrorResponse(
     public static ErrorResponse TransactionNotFound(string folio) =>
         new("TRANSACTION_NOT_FOUND", $"El ticket '{folio}' no existe");
 
+    /// <summary>404 of supervision summary (PMC-31 / PMC-16) for an unknown cash shift.</summary>
+    public static ErrorResponse CashShiftNotFound() =>
+        new("CASH_SHIFT_NOT_FOUND", "El turno de caja no existe");
+
     /// <summary>400 body: every validation message joined in one Spanish sentence list.</summary>
     public static ErrorResponse Validation(ValidationResult result) =>
         new(ValidationErrorCode, string.Join(" ", result.Errors.Select(e => e.ErrorMessage).Distinct()));

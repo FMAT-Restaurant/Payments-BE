@@ -37,6 +37,37 @@ public class CashShiftsController(
         return NotFound(new ErrorResponse("CASH_SHIFT_NOT_OPEN", result.Error!));
     }
 
+    [HttpGet("{cash_shift_id}/summary")]
+    [ProducesResponseType<CashShiftSummaryResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType<ErrorResponse>(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType<ErrorResponse>(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType<ErrorResponse>(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetSummaryById(
+        [FromRoute(Name = "cash_shift_id")] string cashShiftId,
+        CancellationToken ct)
+    {
+        // Only Administrador, Gerente, and Admin roles can supervise cash shifts.
+        if (!User.IsInRole("Administrador") && !User.IsInRole("Gerente") && !User.IsInRole("Admin"))
+        {
+            return StatusCode(StatusCodes.Status403Forbidden,
+                new ErrorResponse("FORBIDDEN_ROLE", "No tiene permisos para realizar esta acción."));
+        }
+
+        if (!Guid.TryParse(cashShiftId, out var shiftId) || shiftId == Guid.Empty)
+        {
+            return BadRequest(new ErrorResponse(ErrorResponse.ValidationErrorCode, "El id del turno de caja tiene un formato inválido."));
+        }
+
+        var result = await shifts.GetSummaryByIdAsync(shiftId, ct);
+        if (result.Outcome == ShiftSummaryByIdOutcome.Found)
+        {
+            return Ok(result.Response);
+        }
+
+        return NotFound(ErrorResponse.CashShiftNotFound());
+    }
+
     [HttpPost("open")]
     [ProducesResponseType<OpenCashShiftResponse>(StatusCodes.Status201Created)]
     [ProducesResponseType<ErrorResponse>(StatusCodes.Status400BadRequest)]
