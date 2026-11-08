@@ -43,7 +43,7 @@ public class SalesHistoryQueryValidatorTests
 
         var result = _validator.Validate(query);
 
-        Assert.Contains(result.Errors, e => e.ErrorMessage.Contains("date range is invalid"));
+        Assert.Contains(result.Errors, e => e.ErrorMessage.Contains("rango de fechas no es válido"));
     }
 
     [Theory]

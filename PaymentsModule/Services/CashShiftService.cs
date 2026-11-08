@@ -39,7 +39,7 @@ public class CashShiftService(PaymentsDbContext db)
             .SingleOrDefaultAsync(s => s.CashierId == cashierId && s.Status == CashShiftStatus.Open, ct);
         if (shift is null)
         {
-            return new(ShiftSummaryOutcome.NoOpenShift, Error: "The cashier has no open cash shift.");
+            return new(ShiftSummaryOutcome.NoOpenShift, Error: "No hay un turno de caja abierto para este usuario");
         }
 
         var (cashSales, cardTotal, _) = await CalculateShiftTotalsAsync(shift.Id, ct);
@@ -166,9 +166,9 @@ public class CashShiftService(PaymentsDbContext db)
     }
 
     private static OpenShiftResult AlreadyOpen() =>
-        new(OpenShiftOutcome.AlreadyOpen, Error: "The cashier already has an open cash shift.");
+        new(OpenShiftOutcome.AlreadyOpen, Error: "Ya existe un turno de caja abierto");
 
     private static CloseShiftResult NoOpenShift() =>
-        new(CloseShiftOutcome.NoOpenShift, Error: "The cashier has no open cash shift.");
+        new(CloseShiftOutcome.NoOpenShift, Error: "No hay un turno de caja abierto para este usuario");
 }
 

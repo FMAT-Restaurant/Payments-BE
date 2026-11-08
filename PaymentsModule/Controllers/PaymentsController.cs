@@ -9,12 +9,12 @@ namespace PaymentsModule.Controllers;
 
 [ApiController]
 [Authorize]
-[Route("api/v1/pagos")]
+[Route("api/v1/payments")]
 public class PaymentsController(ChargeService charges, IValidator<ChargeRequest> validator) : ControllerBase
 {
-    [HttpPost("cobrar")]
+    [HttpPost("charge")]
     [ProducesResponseType<ChargeResponse>(StatusCodes.Status201Created)]
-    [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType<ErrorResponse>(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     [ProducesResponseType<ErrorResponse>(StatusCodes.Status403Forbidden)]
     [ProducesResponseType<ErrorResponse>(StatusCodes.Status404NotFound)]
@@ -25,7 +25,7 @@ public class PaymentsController(ChargeService charges, IValidator<ChargeRequest>
         var validation = await validator.ValidateAsync(request, ct);
         if (!validation.IsValid)
         {
-            return ValidationProblem(new ValidationProblemDetails(validation.ToDictionary()));
+            return BadRequest(ErrorResponse.Validation(validation));
         }
 
         // Cashier identity comes only from the JWT forwarded by the API Gateway (RNF-04).

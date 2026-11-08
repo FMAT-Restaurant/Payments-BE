@@ -1,5 +1,9 @@
+using System.Globalization;
+using System.Reflection;
+using System.Text.Json.Serialization;
 using FluentValidation;
 using MassTransit;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using OpenTelemetry;
 using OpenTelemetry.Metrics;
@@ -18,8 +22,14 @@ builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
 builder.Services.AddHealthChecks();
-builder.Services.AddControllers();
-builder.Services.AddProblemDetails();
+// Error contract of every endpoint: { "code", "message" } with the message in Spanish (PMC-6, 05/11/2026).
+builder.Services.AddControllers().ConfigureApiBehaviorOptions(options =>
+    options.InvalidModelStateResponseFactory = _ => new BadRequestObjectResult(
+        new ErrorResponse(ErrorResponse.ValidationErrorCode, "La solicitud tiene un formato inválido.")));
+ValidatorOptions.Global.LanguageManager.Culture = new CultureInfo("es");
+// Built-in messages name the wire field (e.g. 'fondo_inicial') instead of the C# property.
+ValidatorOptions.Global.DisplayNameResolver = (_, member, _) =>
+    member?.GetCustomAttribute<JsonPropertyNameAttribute>()?.Name;
 
 // JWT forwarded by the API Gateway. Authority/audience come from Authentication:Schemes:Bearer in configuration.
 builder.Services.AddAuthentication().AddJwtBearer();
@@ -86,8 +96,10 @@ if (!string.IsNullOrWhiteSpace(builder.Configuration["OTEL_EXPORTER_OTLP_ENDPOIN
 
 var app = builder.Build();
 
-// Unhandled errors (e.g. database failures after rollback) become a 500 ProblemDetails without internals.
-app.UseExceptionHandler();
+// Unhandled errors (e.g. database failures after rollback) become a generic 500 without internals.
+app.UseExceptionHandler(handler => handler.Run(context =>
+    context.Response.WriteAsJsonAsync(
+        new ErrorResponse("INTERNAL_ERROR", "Ocurrió un error interno. Intente de nuevo más tarde."))));
 
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())

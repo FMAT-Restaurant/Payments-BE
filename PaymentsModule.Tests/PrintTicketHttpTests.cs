@@ -18,7 +18,7 @@ public class PrintTicketHttpTests(PaymentsApiFactory api) : IClassFixture<Paymen
     {
         using var client = api.CreateAnonymousClient();
 
-        var response = await client.GetAsync("/api/v1/pagos/TX-00000000-000000/ticket-impresion");
+        var response = await client.GetAsync("/api/v1/payments/TX-00000000-000000/ticket");
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
@@ -31,7 +31,7 @@ public class PrintTicketHttpTests(PaymentsApiFactory api) : IClassFixture<Paymen
         api.Failures.FailQueriesWith(folio);
         using var client = api.CreateAuthenticatedClient();
 
-        var response = await client.GetAsync($"/api/v1/pagos/{folio}/ticket-impresion");
+        var response = await client.GetAsync($"/api/v1/payments/{folio}/ticket");
         var body = await response.Content.ReadAsStringAsync();
 
         Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
@@ -53,7 +53,7 @@ public class PrintTicketHttpTests(PaymentsApiFactory api) : IClassFixture<Paymen
 
         using var client = api.CreateAuthenticatedClient();
 
-        var response = await client.GetAsync($"/api/v1/pagos/{sale.Folio}/ticket-impresion");
+        var response = await client.GetAsync($"/api/v1/payments/{sale.Folio}/ticket");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal(

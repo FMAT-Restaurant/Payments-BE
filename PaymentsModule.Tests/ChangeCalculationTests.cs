@@ -213,12 +213,35 @@ public class ChangeCalculationTests : IClassFixture<PaymentsApiFactory>, IAsyncL
         var (status, body) = await PostThroughApiAsync(Request(session, Cash(100m)), cashier);
 
         Assert.Equal(HttpStatusCode.InternalServerError, status);
-        using var problem = JsonDocument.Parse(body);
-        Assert.Equal(500, problem.RootElement.GetProperty("status").GetInt32());
-        // PMC-13-P9: standard ProblemDetails without internals.
+        using var error = JsonDocument.Parse(body);
+        Assert.Equal("INTERNAL_ERROR", error.RootElement.GetProperty("code").GetString());
+        // PMC-13-P9 / PMC-6: generic { code, message } without internals.
         Assert.DoesNotContain("Simulated", body);
         Assert.DoesNotContain("PaymentBreakdown", body);
         Assert.Null(await FindAsync(session, _api.Services));
+    }
+
+    // PMC-6: 400 also answers { code, message } in Spanish, both for malformed JSON and for validation rules.
+    [Fact]
+    public async Task Bad_requests_answer_validation_error_in_spanish_through_the_pipeline()
+    {
+        using var client = _api.CreateAuthenticatedClient($"cashier-{Guid.NewGuid():N}");
+
+        using var malformed = await client.PostAsync(
+            "/api/v1/payments/charge", new StringContent("{", System.Text.Encoding.UTF8, "application/json"));
+        using var invalid = await client.PostAsJsonAsync(
+            "/api/v1/payments/cash-shifts/open", new { fondo_inicial = -1m });
+
+        Assert.Equal(HttpStatusCode.BadRequest, malformed.StatusCode);
+        var malformedError = await malformed.Content.ReadFromJsonAsync<ErrorResponse>();
+        Assert.Equal(ErrorResponse.ValidationErrorCode, malformedError!.Code);
+        Assert.Equal("La solicitud tiene un formato inválido.", malformedError.Message);
+
+        Assert.Equal(HttpStatusCode.BadRequest, invalid.StatusCode);
+        var invalidError = await invalid.Content.ReadFromJsonAsync<ErrorResponse>();
+        Assert.Equal(ErrorResponse.ValidationErrorCode, invalidError!.Code);
+        Assert.Contains("'fondo_inicial'", invalidError.Message);
+        Assert.Contains("mayor o igual", invalidError.Message);
     }
 
     [Fact]
@@ -317,7 +340,7 @@ public class ChangeCalculationTests : IClassFixture<PaymentsApiFactory>, IAsyncL
     private async Task<(HttpStatusCode Status, string Body)> PostThroughApiAsync(ChargeRequest request, string cashierId)
     {
         using var client = _api.CreateAuthenticatedClient(cashierId);
-        using var response = await client.PostAsJsonAsync("/api/v1/pagos/cobrar", request);
+        using var response = await client.PostAsJsonAsync("/api/v1/payments/charge", request);
         return (response.StatusCode, await response.Content.ReadAsStringAsync());
     }
 
