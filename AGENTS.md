@@ -176,6 +176,25 @@ Applies to every endpoint and supersedes the routes and `ProblemDetails` bodies 
 
 ---
 
+## Transaction Detail by Folio Decisions (PMC-11 / PMC-25)
+
+Agreed with the PO (05/11/2026) for the Frontend transaction detail modal:
+
+- **Route:** `GET /api/v1/payments/{folio}`, accessible to any authenticated user (`[Authorize]`). Requests without token return `401 Unauthorized`.
+- **Response contract (200 OK):** returns `TransactionDetailResponse` in strict snake_case with English field names and no cancellation block:
+  - Header: `folio`, `cash_shift_id`, `dinning_session_id`, `status` (`COMPLETADO` / `CANCELADO`), `paid_at` (`PaymentTransaction.CreatedAt`), `subtotal`, `taxes`, `tip`, `total`, and `change_given`.
+  - Items (`items`): array of `{ dish_name, quantity, unit_price, amount }`.
+  - Payments (`payment_breakdowns`): array of `{ method, amount, authorization_reference }`.
+- **Single query projection (no N+1):** EF Core query with `.AsNoTracking()` directly projecting to `TransactionDetailResponse` without loading full entities or tracking graphs, preventing circular references and loading header, items, and payment breakdowns in one database roundtrip.
+- **Inmutability:** returns strictly the plain-text items, amounts, and payments persisted at charge time (PMC-6); no external calls to catalogue, orders, or other microservices.
+- **Ordered lines and payments:** preserves charge order using `.OrderBy(i => i.Id)` and `.OrderBy(p => p.Id)` (sequential GUIDs assigned at charge time).
+- **Error contract:**
+  - Inexistent folio: `404 TRANSACTION_NOT_FOUND` (`"El ticket '{folio}' no existe"`).
+  - Database failure / timeout: unhandled exception triggers rollback and global exception handler returns `500 INTERNAL_ERROR` (`"Ocurrió un error interno. Intente de nuevo más tarde."`) without SQL Server internals.
+- **Tests:** unit and SQL tests in `TransactionDetailTests` (`payments_tests_queries`), and HTTP pipeline integration tests in `TransactionDetailHttpTests` using `PaymentsApiFactory` (`payments_tests_http`) covering 200 with full contract, 404 for missing folio, 500 on timeout without internal leak, and 401 unauthorized.
+
+---
+
 ## Real-Time Cash Shift Summary Decisions (PMC-9)
 
 Agreed while implementing PMC-9:

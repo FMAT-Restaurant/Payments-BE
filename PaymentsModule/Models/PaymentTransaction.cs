@@ -18,6 +18,9 @@ public class PaymentTransaction
     /// <summary>Subtotal + taxes + tip. Always equals the sum of <see cref="Payments"/>.</summary>
     public decimal Total { get; set; }
 
+    /// <summary>Cash handed back to the customer; persisted for detail and audit (PMC-6 / PMC-11).</summary>
+    public decimal ChangeGiven { get; set; }
+
     public TransactionStatus Status { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
     public List<TransactionItem> Items { get; set; } = [];

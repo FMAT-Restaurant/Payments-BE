@@ -72,6 +72,7 @@ public class ChargeService(PaymentsDbContext db, PendingBillService bills, IPubl
             Taxes = bill.Totals.Taxes,
             Tip = request.Tip,
             Total = total,
+            ChangeGiven = calculation.ChangeGiven,
             Status = TransactionStatus.Completed,
             CreatedAt = DateTimeOffset.UtcNow,
             Items = bill.Items.Select(i => new TransactionItem

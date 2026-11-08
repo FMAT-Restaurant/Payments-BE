@@ -60,6 +60,7 @@ public static class QueriesDatabase
             CashierId = shift.CashierId,
             Subtotal = total,
             Total = total,
+            ChangeGiven = 0m,
             Status = status,
             CreatedAt = createdAt,
             Items = [new TransactionItem { DishName = "Ribeye", Quantity = 1, UnitPrice = total, Amount = total }],
