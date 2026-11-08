@@ -26,6 +26,8 @@ public class PaymentsDbContext(DbContextOptions<PaymentsDbContext> options) : Db
         modelBuilder.Entity<CashShift>(e =>
         {
             e.Property(s => s.CashierId).HasMaxLength(128);
+            e.Property(s => s.ClosedByAdminId).HasMaxLength(128);
+            e.Property(s => s.ForceCloseReason).HasMaxLength(500);
             e.Property(s => s.RowVersion).IsRowVersion();
             // Concurrency guard: at most one open shift per cashier at any time.
             e.HasIndex(s => s.CashierId)

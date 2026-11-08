@@ -260,6 +260,28 @@ Agreed while implementing the open cash shifts listing for supervision:
 
 ---
 
+## Force Close Cash Shift for Supervision Decisions (PMC-16 / HU-FE-09)
+
+Agreed while implementing the forced closure of cash shifts by supervision:
+
+- **Route and roles:** `POST /api/v1/payments/cash-shifts/{cash_shift_id}/force-close` is protected by `[Authorize]` and exclusively accessible to supervisor roles (`Administrador`, `Gerente`, and `Admin`). Requests without a token return `401 Unauthorized`. Requests from unauthorized roles (such as `Cajero`) are rejected with `403 FORBIDDEN_ROLE` (`{ "code": "FORBIDDEN_ROLE", "message": "No tiene permisos para realizar esta acción." }`) before business logic execution.
+- **Strict identity and audit trail:** the supervisor identity is extracted strictly from the JWT claim (`NameIdentifier` / `sub`). It is persisted on `CashShift.ClosedByAdminId` (nvarchar(128)) together with `CashShift.ForceCloseReason` (nvarchar(500)), providing an immutable audit trail.
+- **Input validation (FluentValidation):** `declared_cash` is required, >= 0 with decimal precision (18, 2); `force_close_reason` is required and must have a minimum length of 10 characters. Route parameter `{cash_shift_id}` is validated as a non-empty GUID. Validation failures return `400 VALIDATION_ERROR` with Spanish messages.
+- **Calculation reuse and locking:** reuses the same SQL aggregation (`CalculateShiftTotalsAsync`) shared with PMC-9, calculating `expected_cash = initial_fund + cash_sales`, `card_transaction_count`, and `retained_tips`. Row-level lock (`UPDLOCK, ROWLOCK`) on `CashShifts` inside a `ReadCommitted` transaction ensures serialization against concurrent sales or close operations without blocking other shifts.
+- **State transitions and messages:** compares `declared_cash` against `expected_cash`:
+  - Exact match (`difference == 0m`): transitions status to `Closed` (`CERRADO`) with message `"Cierre forzado ejecutado exitosamente con corte exacto."`.
+  - Shortage (`difference < 0m`): transitions status to `Unbalanced` (`DESCUADRADO`) with message `"Cierre forzado ejecutado exitosamente con faltante de caja."`.
+  - Surplus (`difference > 0m`): transitions status to `Unbalanced` (`DESCUADRADO`) with message `"Cierre forzado ejecutado exitosamente con sobrante de caja."`.
+- **Response contract (200 OK):** returns `ForceCloseCashShiftResponse` in strict snake_case:
+  `cash_shift_id`, `cashier_name`, `opened_at`, `closed_at`, `status`, `opening_float`, `expected_cash`, `declared_cash`, `difference`, `card_transaction_count`, `retained_tips`, and `message`.
+- **Error catalog & infrastructure resilience:**
+  - Non-existent shift: `404 CASH_SHIFT_NOT_FOUND` (`"El turno de caja no existe"`).
+  - Already closed shift: `409 CASH_SHIFT_CLOSED` (`"El turno de caja ya ha sido cerrado"`).
+  - Database failure / timeout: automatic rollback retains the shift in `Open` (`ABIERTO`) status and global exception handler returns `500 INTERNAL_ERROR` without leaking internals.
+- **Tests:** unit tests in `CashShiftServiceTests` and HTTP pipeline integration tests in `ForceCloseCashShiftHttpTests` using `PaymentsApiFactory` (`payments_tests_http`), verifying all 4 Gherkin scenarios: happy path (shortage, exact, surplus), RBAC 403 / 401, non-existent 404, already closed 409, validation 400, and DB failure rollback 500.
+
+---
+
 ## General Rules
 
 - **Code Formatting:** All code contributions must adhere to repository standards and pass `dotnet format --verify-no-changes`.

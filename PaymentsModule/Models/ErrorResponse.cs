@@ -24,6 +24,10 @@ public record ErrorResponse(
     public static ErrorResponse CashShiftNotFound() =>
         new("CASH_SHIFT_NOT_FOUND", "El turno de caja no existe");
 
+    /// <summary>409 of PMC-16 when attempting to force-close an already closed shift.</summary>
+    public static ErrorResponse CashShiftClosed() =>
+        new("CASH_SHIFT_CLOSED", "El turno de caja ya ha sido cerrado");
+
     /// <summary>400 body: every validation message joined in one Spanish sentence list.</summary>
     public static ErrorResponse Validation(ValidationResult result) =>
         new(ValidationErrorCode, string.Join(" ", result.Errors.Select(e => e.ErrorMessage).Distinct()));

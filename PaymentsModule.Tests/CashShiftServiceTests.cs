@@ -42,6 +42,7 @@ public class CashShiftServiceTests : IAsyncLifetime
             .AddScoped<IValidator<ChargeRequest>, ChargeRequestValidator>()
             .AddScoped<IValidator<OpenCashShiftRequest>, OpenCashShiftRequestValidator>()
             .AddScoped<IValidator<CloseCashShiftRequest>, CloseCashShiftRequestValidator>()
+            .AddScoped<IValidator<ForceCloseCashShiftRequest>, ForceCloseCashShiftRequestValidator>()
             .AddMassTransitTestHarness(x =>
             {
                 x.AddEntityFrameworkOutbox<PaymentsDbContext>(o =>
@@ -767,6 +768,210 @@ public class CashShiftServiceTests : IAsyncLifetime
         Assert.Equal("FORBIDDEN_ROLE", error.Code);
     }
 
+    [Fact]
+    public async Task Force_close_by_admin_with_exact_cash_transitions_to_closed_and_records_audit()
+    {
+        var cashier = NewCashier();
+        var opened = await OpenAsync(new OpenCashShiftRequest(500.00m), cashier);
+        await RecordSaleAsync(cashier, billTotal: 200.00m, tip: 20.00m, new PaymentRequest(PaymentMethod.Cash, 220.00m, null));
+        var shiftId = opened.Response!.CashShiftId;
+
+        var request = new ForceCloseCashShiftRequest(700.00m, "El cajero finalizó su turno y abandonó las instalaciones sin ejecutar el corte en el sistema.");
+        var result = await ForceCloseAsync(shiftId, request, "admin-123");
+
+        Assert.Equal(ForceCloseShiftOutcome.Closed, result.Outcome);
+        var resp = result.Response;
+        Assert.NotNull(resp);
+        Assert.Equal(shiftId, resp.CashShiftId);
+        Assert.Equal(cashier, resp.CashierName);
+        Assert.Equal(CashShiftStatus.Closed, resp.Status);
+        Assert.Equal(500.00m, resp.OpeningFloat);
+        Assert.Equal(700.00m, resp.ExpectedCash);
+        Assert.Equal(700.00m, resp.DeclaredCash);
+        Assert.Equal(0.00m, resp.Difference);
+        Assert.Equal(0, resp.CardTransactionCount);
+        Assert.Equal(20.00m, resp.RetainedTips);
+        Assert.Contains("corte exacto", resp.Message);
+
+        var saved = await FindShiftAsync(shiftId);
+        Assert.NotNull(saved);
+        Assert.Equal(CashShiftStatus.Closed, saved.Status);
+        Assert.Equal("admin-123", saved.ClosedByAdminId);
+        Assert.Equal(request.ForceCloseReason, saved.ForceCloseReason);
+        Assert.Equal(700.00m, saved.DeclaredCash);
+        Assert.Equal(700.00m, saved.ExpectedCash);
+        Assert.Equal(0.00m, saved.Difference);
+        Assert.NotNull(saved.ClosedAt);
+    }
+
+    [Fact]
+    public async Task Force_close_by_manager_with_shortage_transitions_to_unbalanced_and_records_audit()
+    {
+        var cashier = NewCashier();
+        var opened = await OpenAsync(new OpenCashShiftRequest(500.00m), cashier);
+        await RecordSaleAsync(cashier, billTotal: 1750.00m, tip: 120.00m,
+            new PaymentRequest(PaymentMethod.Cash, 1750.00m + 120.00m, null));
+        await RecordSaleAsync(cashier, billTotal: 300.00m, tip: 0.00m,
+            new PaymentRequest(PaymentMethod.CreditCard, 300.00m, "AUTH-1"));
+        var shiftId = opened.Response!.CashShiftId;
+
+        var request = new ForceCloseCashShiftRequest(2100.00m, "El cajero finalizó su turno y abandonó las instalaciones sin ejecutar el corte en el sistema.");
+        var result = await ForceCloseAsync(shiftId, request, "gerente-456");
+
+        Assert.Equal(ForceCloseShiftOutcome.Closed, result.Outcome);
+        var resp = result.Response;
+        Assert.NotNull(resp);
+        Assert.Equal(shiftId, resp.CashShiftId);
+        Assert.Equal(CashShiftStatus.Unbalanced, resp.Status);
+        Assert.Equal(500.00m, resp.OpeningFloat);
+        Assert.Equal(2250.00m, resp.ExpectedCash);
+        Assert.Equal(2100.00m, resp.DeclaredCash);
+        Assert.Equal(-150.00m, resp.Difference);
+        Assert.Equal(1, resp.CardTransactionCount);
+        Assert.Equal(120.00m, resp.RetainedTips);
+        Assert.Equal("Cierre forzado ejecutado exitosamente con faltante de caja.", resp.Message);
+
+        var saved = await FindShiftAsync(shiftId);
+        Assert.NotNull(saved);
+        Assert.Equal(CashShiftStatus.Unbalanced, saved.Status);
+        Assert.Equal("gerente-456", saved.ClosedByAdminId);
+        Assert.Equal(request.ForceCloseReason, saved.ForceCloseReason);
+        Assert.Equal(-150.00m, saved.Difference);
+    }
+
+    [Fact]
+    public async Task Force_close_with_surplus_transitions_to_unbalanced_with_surplus_message()
+    {
+        var cashier = NewCashier();
+        var opened = await OpenAsync(new OpenCashShiftRequest(500.00m), cashier);
+        var shiftId = opened.Response!.CashShiftId;
+
+        var request = new ForceCloseCashShiftRequest(600.00m, "Supervisor cerró turno con dinero sobrante.");
+        var result = await ForceCloseAsync(shiftId, request, "admin-1");
+
+        Assert.Equal(ForceCloseShiftOutcome.Closed, result.Outcome);
+        Assert.Equal(CashShiftStatus.Unbalanced, result.Response!.Status);
+        Assert.Equal(100.00m, result.Response.Difference);
+        Assert.Equal("Cierre forzado ejecutado exitosamente con sobrante de caja.", result.Response.Message);
+    }
+
+    [Fact]
+    public async Task Force_close_returns_not_found_when_shift_does_not_exist()
+    {
+        var nonExistentId = Guid.NewGuid();
+        var request = new ForceCloseCashShiftRequest(1000.00m, "Razón de cierre forzado válida.");
+
+        var result = await ForceCloseAsync(nonExistentId, request, "admin-1");
+
+        Assert.Equal(ForceCloseShiftOutcome.NotFound, result.Outcome);
+        Assert.Equal("El turno de caja no existe", result.Error);
+    }
+
+    [Fact]
+    public async Task Force_close_returns_already_closed_when_shift_is_not_open()
+    {
+        var cashier = NewCashier();
+        var opened = await OpenAsync(new OpenCashShiftRequest(500.00m), cashier);
+        await CloseAsync(new CloseCashShiftRequest(500.00m), cashier);
+        var shiftId = opened.Response!.CashShiftId;
+
+        var request = new ForceCloseCashShiftRequest(500.00m, "Intento de forzar cierre sobre turno ya cerrado.");
+        var result = await ForceCloseAsync(shiftId, request, "admin-1");
+
+        Assert.Equal(ForceCloseShiftOutcome.AlreadyClosed, result.Outcome);
+        Assert.Equal("El turno de caja ya ha sido cerrado", result.Error);
+    }
+
+    [Theory]
+    [InlineData("Administrador", StatusCodes.Status200OK)]
+    [InlineData("Gerente", StatusCodes.Status200OK)]
+    [InlineData("Admin", StatusCodes.Status200OK)]
+    [InlineData("Cajero", StatusCodes.Status403Forbidden)]
+    [InlineData(null, StatusCodes.Status403Forbidden)]
+    public async Task Controller_force_close_authorizes_supervisors_and_rejects_cajero_with_403(string? role, int expectedStatus)
+    {
+        var cashier = NewCashier();
+        var opened = await OpenAsync(new OpenCashShiftRequest(500.00m), cashier);
+        var request = new ForceCloseCashShiftRequest(500.00m, "Razón válida para forzar cierre.");
+
+        var result = await ControllerForceCloseAsync(opened.Response!.CashShiftId.ToString(), request, role);
+
+        Assert.Equal(expectedStatus, result.StatusCode);
+        if (expectedStatus == StatusCodes.Status403Forbidden)
+        {
+            var error = Assert.IsType<ErrorResponse>(result.Value);
+            Assert.Equal("FORBIDDEN_ROLE", error.Code);
+            Assert.False(string.IsNullOrWhiteSpace(error.Message));
+        }
+        else
+        {
+            Assert.IsType<ForceCloseCashShiftResponse>(result.Value);
+        }
+    }
+
+    [Theory]
+    [InlineData("not-a-guid")]
+    [InlineData("00000000-0000-0000-0000-000000000000")]
+    public async Task Controller_force_close_validates_guid_format(string invalidId)
+    {
+        var request = new ForceCloseCashShiftRequest(500.00m, "Razón válida para forzar cierre.");
+        var result = await ControllerForceCloseAsync(invalidId, request, "Administrador");
+
+        Assert.Equal(StatusCodes.Status400BadRequest, result.StatusCode);
+        var error = Assert.IsType<ErrorResponse>(result.Value);
+        Assert.Equal(ErrorResponse.ValidationErrorCode, error.Code);
+    }
+
+    [Fact]
+    public async Task Controller_force_close_validates_body_inputs()
+    {
+        var validId = Guid.NewGuid().ToString();
+
+        // Null declared cash
+        var result1 = await ControllerForceCloseAsync(validId, new ForceCloseCashShiftRequest(null, "Motivo válido de más de diez caracteres."), "Administrador");
+        Assert.Equal(StatusCodes.Status400BadRequest, result1.StatusCode);
+
+        // Negative declared cash
+        var result2 = await ControllerForceCloseAsync(validId, new ForceCloseCashShiftRequest(-10m, "Motivo válido de más de diez caracteres."), "Administrador");
+        Assert.Equal(StatusCodes.Status400BadRequest, result2.StatusCode);
+
+        // Empty reason
+        var result3 = await ControllerForceCloseAsync(validId, new ForceCloseCashShiftRequest(100m, ""), "Administrador");
+        Assert.Equal(StatusCodes.Status400BadRequest, result3.StatusCode);
+
+        // Reason too short (< 10 chars)
+        var result4 = await ControllerForceCloseAsync(validId, new ForceCloseCashShiftRequest(100m, "Corto"), "Administrador");
+        Assert.Equal(StatusCodes.Status400BadRequest, result4.StatusCode);
+    }
+
+    [Fact]
+    public async Task Controller_force_close_returns_404_when_shift_missing()
+    {
+        var request = new ForceCloseCashShiftRequest(500.00m, "Motivo válido de cierre forzado.");
+        var result = await ControllerForceCloseAsync(Guid.NewGuid().ToString(), request, "Administrador");
+
+        Assert.Equal(StatusCodes.Status404NotFound, result.StatusCode);
+        var error = Assert.IsType<ErrorResponse>(result.Value);
+        Assert.Equal("CASH_SHIFT_NOT_FOUND", error.Code);
+        Assert.Equal("El turno de caja no existe", error.Message);
+    }
+
+    [Fact]
+    public async Task Controller_force_close_returns_409_when_shift_already_closed()
+    {
+        var cashier = NewCashier();
+        var opened = await OpenAsync(new OpenCashShiftRequest(500.00m), cashier);
+        await CloseAsync(new CloseCashShiftRequest(500.00m), cashier);
+
+        var request = new ForceCloseCashShiftRequest(500.00m, "Motivo válido de cierre forzado.");
+        var result = await ControllerForceCloseAsync(opened.Response!.CashShiftId.ToString(), request, "Administrador");
+
+        Assert.Equal(StatusCodes.Status409Conflict, result.StatusCode);
+        var error = Assert.IsType<ErrorResponse>(result.Value);
+        Assert.Equal("CASH_SHIFT_CLOSED", error.Code);
+        Assert.Equal("El turno de caja ya ha sido cerrado", error.Message);
+    }
+
     private static string NewCashier() => $"cashier-{Guid.NewGuid()}";
 
     private async Task<ShiftSummaryResult> GetSummaryAsync(string cashierId)
@@ -805,9 +1010,43 @@ public class CashShiftServiceTests : IAsyncLifetime
         return await scope.ServiceProvider.GetRequiredService<CashShiftService>().CloseAsync(request, cashierId);
     }
 
-    private async Task RecordSaleAsync(string cashierId, decimal billTotal, decimal tip, PaymentRequest payment)
+    private async Task<ForceCloseShiftResult> ForceCloseAsync(Guid shiftId, ForceCloseCashShiftRequest request, string adminId)
     {
-        var result = await TryChargeOnShiftAsync(cashierId, billTotal, tip, payment);
+        await using var scope = _provider.CreateAsyncScope();
+        return await scope.ServiceProvider.GetRequiredService<CashShiftService>().ForceCloseAsync(shiftId, request, adminId);
+    }
+
+    private async Task<ObjectResult> ControllerForceCloseAsync(
+        string cashShiftId,
+        ForceCloseCashShiftRequest request,
+        string? role = "Administrador",
+        string? adminId = "supervisor-user")
+    {
+        await using var scope = _provider.CreateAsyncScope();
+        var controller = CreateController(scope.ServiceProvider, adminId, role);
+        return ToObjectResult(await controller.ForceClose(cashShiftId, request, CancellationToken.None));
+    }
+
+    private async Task RecordSaleAsync(string cashierId, decimal billTotal, decimal tip, params PaymentRequest[] payments)
+    {
+        var session = Guid.NewGuid();
+        await using var scope = _provider.CreateAsyncScope();
+        await scope.ServiceProvider.GetRequiredService<PendingBillService>().SaveSnapshotAsync(new DinningSessionReadyEvent(
+            Guid.NewGuid(), session, Guid.NewGuid(), Guid.NewGuid(), DateTimeOffset.UtcNow,
+            [new BillItem(Guid.NewGuid(), "Tacos al Pastor", 1, billTotal, billTotal)],
+            new BillTotals(billTotal, 0m, billTotal)));
+
+        var paymentList = payments.Length > 0
+            ? payments.ToList()
+            : [new PaymentRequest(PaymentMethod.Cash, billTotal + tip, null)];
+
+        var request = new ChargeRequest(
+            session,
+            tip,
+            paymentList,
+            [new ItemSnapshot("Tacos al Pastor", 1, billTotal, billTotal)]);
+
+        var result = await scope.ServiceProvider.GetRequiredService<ChargeService>().ChargeAsync(request, cashierId);
         Assert.Equal(ChargeOutcome.Completed, result.Outcome);
     }
 
@@ -891,7 +1130,8 @@ public class CashShiftServiceTests : IAsyncLifetime
         return new CashShiftsController(
             services.GetRequiredService<CashShiftService>(),
             services.GetRequiredService<IValidator<OpenCashShiftRequest>>(),
-            services.GetRequiredService<IValidator<CloseCashShiftRequest>>())
+            services.GetRequiredService<IValidator<CloseCashShiftRequest>>(),
+            services.GetRequiredService<IValidator<ForceCloseCashShiftRequest>>())
         {
             ControllerContext = new ControllerContext
             {

@@ -212,6 +212,10 @@ namespace PaymentsModule.Data.Migrations
                     b.Property<DateTimeOffset?>("ClosedAt")
                         .HasColumnType("datetimeoffset");
 
+                    b.Property<string>("ClosedByAdminId")
+                        .HasMaxLength(128)
+                        .HasColumnType("nvarchar(128)");
+
                     b.Property<decimal?>("DeclaredCash")
                         .HasPrecision(18, 2)
                         .HasColumnType("decimal(18,2)");
@@ -223,6 +227,10 @@ namespace PaymentsModule.Data.Migrations
                     b.Property<decimal?>("ExpectedCash")
                         .HasPrecision(18, 2)
                         .HasColumnType("decimal(18,2)");
+
+                    b.Property<string>("ForceCloseReason")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
 
                     b.Property<decimal>("InitialFund")
                         .HasPrecision(18, 2)

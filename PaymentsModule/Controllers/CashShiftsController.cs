@@ -13,7 +13,8 @@ namespace PaymentsModule.Controllers;
 public class CashShiftsController(
     CashShiftService shifts,
     IValidator<OpenCashShiftRequest> openValidator,
-    IValidator<CloseCashShiftRequest> closeValidator) : ControllerBase
+    IValidator<CloseCashShiftRequest> closeValidator,
+    IValidator<ForceCloseCashShiftRequest> forceCloseValidator) : ControllerBase
 {
     [HttpGet("me")]
     [ProducesResponseType<ActiveCashShiftResponse>(StatusCodes.Status200OK)]
@@ -170,6 +171,53 @@ public class CashShiftsController(
         }
 
         return UnprocessableEntity(new ErrorResponse("CASH_SHIFT_NOT_OPEN", result.Error!));
+    }
+
+    [HttpPost("{cash_shift_id}/force-close")]
+    [ProducesResponseType<ForceCloseCashShiftResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType<ErrorResponse>(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType<ErrorResponse>(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType<ErrorResponse>(StatusCodes.Status404NotFound)]
+    [ProducesResponseType<ErrorResponse>(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> ForceClose(
+        [FromRoute(Name = "cash_shift_id")] string cashShiftId,
+        ForceCloseCashShiftRequest request,
+        CancellationToken ct)
+    {
+        // Only Administrador, Gerente, and Admin roles can force close shifts.
+        if (!User.IsInRole("Administrador") && !User.IsInRole("Gerente") && !User.IsInRole("Admin"))
+        {
+            return StatusCode(StatusCodes.Status403Forbidden,
+                new ErrorResponse("FORBIDDEN_ROLE", "No tiene permisos para realizar esta acción."));
+        }
+
+        if (!Guid.TryParse(cashShiftId, out var shiftId) || shiftId == Guid.Empty)
+        {
+            return BadRequest(new ErrorResponse(ErrorResponse.ValidationErrorCode, "El id del turno de caja tiene un formato inválido."));
+        }
+
+        var validation = await forceCloseValidator.ValidateAsync(request, ct);
+        if (!validation.IsValid)
+        {
+            return BadRequest(ErrorResponse.Validation(validation));
+        }
+
+        // Supervisor identity comes exclusively from the JWT claim (AC2).
+        var adminId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (string.IsNullOrEmpty(adminId))
+        {
+            return Unauthorized();
+        }
+
+        var result = await shifts.ForceCloseAsync(shiftId, request, adminId, ct);
+        return result.Outcome switch
+        {
+            ForceCloseShiftOutcome.Closed => Ok(result.Response),
+            ForceCloseShiftOutcome.NotFound => NotFound(ErrorResponse.CashShiftNotFound()),
+            ForceCloseShiftOutcome.AlreadyClosed => Conflict(ErrorResponse.CashShiftClosed()),
+            _ => StatusCode(StatusCodes.Status500InternalServerError, new ErrorResponse("INTERNAL_ERROR", "Ocurrió un error interno."))
+        };
     }
 }
 

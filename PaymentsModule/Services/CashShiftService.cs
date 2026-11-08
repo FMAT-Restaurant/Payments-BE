@@ -38,6 +38,15 @@ public enum ShiftSummaryByIdOutcome
 
 public record ShiftSummaryByIdResult(ShiftSummaryByIdOutcome Outcome, CashShiftSummaryResponse? Response = null, string? Error = null);
 
+public enum ForceCloseShiftOutcome
+{
+    Closed,
+    NotFound,
+    AlreadyClosed
+}
+
+public record ForceCloseShiftResult(ForceCloseShiftOutcome Outcome, ForceCloseCashShiftResponse? Response = null, string? Error = null);
+
 public class CashShiftService(PaymentsDbContext db)
 {
     /// <summary>Finds the active open cash shift for the authenticated cashier, if any.</summary>
@@ -98,7 +107,7 @@ public class CashShiftService(PaymentsDbContext db)
 
     private async Task<CashShiftSummaryResponse> BuildSummaryResponseAsync(CashShift shift, CancellationToken ct)
     {
-        var (cashSales, cardTotal, _) = await CalculateShiftTotalsAsync(shift.Id, ct);
+        var (cashSales, cardTotal, _, _) = await CalculateShiftTotalsAsync(shift.Id, ct);
         var expectedCash = shift.InitialFund + cashSales;
 
         return new CashShiftSummaryResponse(
@@ -156,7 +165,7 @@ public class CashShiftService(PaymentsDbContext db)
             return NoOpenShift();
         }
 
-        var (cashSales, cardTotal, tipsTotal) = await CalculateShiftTotalsAsync(shift.Id, ct);
+        var (cashSales, cardTotal, tipsTotal, _) = await CalculateShiftTotalsAsync(shift.Id, ct);
 
         var declaredCash = request.DeclaredCash!.Value;
         var expectedCash = shift.InitialFund + cashSales;
@@ -192,7 +201,83 @@ public class CashShiftService(PaymentsDbContext db)
             shift.Id, shift.Status, difference, message));
     }
 
-    private async Task<(decimal CashSales, decimal CardTotal, decimal TipsTotal)> CalculateShiftTotalsAsync(Guid shiftId, CancellationToken ct)
+    /// <summary>Forces the closure of an open cash shift by an administrator or manager, executing shift reconciliation.</summary>
+    public async Task<ForceCloseShiftResult> ForceCloseAsync(
+        Guid shiftId,
+        ForceCloseCashShiftRequest request,
+        string adminId,
+        CancellationToken ct = default)
+    {
+        await using var dbTransaction = await db.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
+
+        // Clustered index seek with UPDLOCK serializes against concurrent operations without blocking other shifts.
+        var shift = await db.CashShifts
+            .FromSqlInterpolated($"SELECT * FROM CashShifts WITH (UPDLOCK, ROWLOCK) WHERE Id = {shiftId}")
+            .SingleOrDefaultAsync(ct);
+
+        if (shift is null)
+        {
+            return new(ForceCloseShiftOutcome.NotFound, Error: "El turno de caja no existe");
+        }
+
+        if (shift.Status != CashShiftStatus.Open)
+        {
+            return new(ForceCloseShiftOutcome.AlreadyClosed, Error: "El turno de caja ya ha sido cerrado");
+        }
+
+        var (cashSales, cardTotal, tipsTotal, cardCount) = await CalculateShiftTotalsAsync(shift.Id, ct);
+
+        var declaredCash = request.DeclaredCash!.Value;
+        var expectedCash = shift.InitialFund + cashSales;
+        var difference = declaredCash - expectedCash;
+        var closedAt = DateTimeOffset.UtcNow;
+
+        shift.DeclaredCash = declaredCash;
+        shift.ExpectedCash = expectedCash;
+        shift.CardTotal = cardTotal;
+        shift.TipsTotal = tipsTotal;
+        shift.Difference = difference;
+        shift.Status = difference == 0m ? CashShiftStatus.Closed : CashShiftStatus.Unbalanced;
+        shift.ClosedAt = closedAt;
+        shift.ClosedByAdminId = adminId;
+        shift.ForceCloseReason = request.ForceCloseReason;
+
+        try
+        {
+            await db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            return new(ForceCloseShiftOutcome.AlreadyClosed, Error: "El turno de caja ya ha sido cerrado");
+        }
+
+        await dbTransaction.CommitAsync(ct);
+
+        var message = difference switch
+        {
+            0m => "Cierre forzado ejecutado exitosamente con corte exacto.",
+            < 0m => "Cierre forzado ejecutado exitosamente con faltante de caja.",
+            > 0m => "Cierre forzado ejecutado exitosamente con sobrante de caja."
+        };
+
+        var response = new ForceCloseCashShiftResponse(
+            shift.Id,
+            shift.CashierId,
+            shift.OpenedAt,
+            closedAt,
+            shift.Status,
+            shift.InitialFund,
+            expectedCash,
+            declaredCash,
+            difference,
+            cardCount,
+            tipsTotal,
+            message);
+
+        return new(ForceCloseShiftOutcome.Closed, response);
+    }
+
+    private async Task<(decimal CashSales, decimal CardTotal, decimal TipsTotal, int CardTransactionCount)> CalculateShiftTotalsAsync(Guid shiftId, CancellationToken ct)
     {
         var totals = await db.Transactions.AsNoTracking()
             .Where(t => t.CashShiftId == shiftId && t.Status == TransactionStatus.Completed)
@@ -200,6 +285,7 @@ public class CashShiftService(PaymentsDbContext db)
             {
                 RawCash = t.Payments.Where(p => p.Method == PaymentMethod.Cash).Sum(p => (decimal?)p.Amount) ?? 0m,
                 RawCard = t.Payments.Where(p => p.Method != PaymentMethod.Cash).Sum(p => (decimal?)p.Amount) ?? 0m,
+                CardPaymentsCount = t.Payments.Count(p => p.Method != PaymentMethod.Cash),
                 t.Tip
             })
             .GroupBy(_ => 1)
@@ -207,6 +293,7 @@ public class CashShiftService(PaymentsDbContext db)
             {
                 RawCash = g.Sum(x => x.RawCash),
                 RawCard = g.Sum(x => x.RawCard),
+                CardCount = g.Sum(x => x.CardPaymentsCount),
                 TipsTotal = g.Sum(x => x.Tip),
                 CashTips = g.Sum(x => x.RawCash >= x.Tip ? x.Tip : x.RawCash)
             })
@@ -217,8 +304,9 @@ public class CashShiftService(PaymentsDbContext db)
         var tipsTotal = totals?.TipsTotal ?? 0m;
         var cashTips = totals?.CashTips ?? 0m;
         var cardTips = tipsTotal - cashTips;
+        var cardCount = totals?.CardCount ?? 0;
 
-        return (rawCash - cashTips, rawCard - cardTips, tipsTotal);
+        return (rawCash - cashTips, rawCard - cardTips, tipsTotal, cardCount);
     }
 
     private static OpenShiftResult AlreadyOpen() =>

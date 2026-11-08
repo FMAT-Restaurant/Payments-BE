@@ -44,6 +44,7 @@ builder.Services.AddScoped<ChargeService>();
 builder.Services.AddSingleton<IChargeCalculationService, ChargeCalculationService>();
 builder.Services.AddScoped<IValidator<OpenCashShiftRequest>, OpenCashShiftRequestValidator>();
 builder.Services.AddScoped<IValidator<CloseCashShiftRequest>, CloseCashShiftRequestValidator>();
+builder.Services.AddScoped<IValidator<ForceCloseCashShiftRequest>, ForceCloseCashShiftRequestValidator>();
 builder.Services.AddScoped<CashShiftService>();
 builder.Services.AddScoped<TransactionDetailService>();
 builder.Services.AddScoped<IValidator<SalesHistoryQuery>, SalesHistoryQueryValidator>();

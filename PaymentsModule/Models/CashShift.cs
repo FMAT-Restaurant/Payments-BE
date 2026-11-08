@@ -15,6 +15,8 @@ public class CashShift
     public CashShiftStatus Status { get; set; } = CashShiftStatus.Open;
     public DateTimeOffset OpenedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset? ClosedAt { get; set; }
+    public string? ClosedByAdminId { get; set; }
+    public string? ForceCloseReason { get; set; }
 
     // Optimistic concurrency token (SQL Server rowversion), required by PMC-8.
     public byte[] RowVersion { get; set; } = [];
@@ -67,3 +69,21 @@ public record OpenShiftListItemResponse(
     [property: JsonPropertyName("cashier_name")] string CashierName,
     [property: JsonPropertyName("opened_at")] DateTimeOffset OpenedAt,
     [property: JsonPropertyName("opening_float")] decimal OpeningFloat);
+
+public record ForceCloseCashShiftRequest(
+    [property: JsonPropertyName("declared_cash")] decimal? DeclaredCash,
+    [property: JsonPropertyName("force_close_reason")] string? ForceCloseReason);
+
+public record ForceCloseCashShiftResponse(
+    [property: JsonPropertyName("cash_shift_id")] Guid CashShiftId,
+    [property: JsonPropertyName("cashier_name")] string CashierName,
+    [property: JsonPropertyName("opened_at")] DateTimeOffset OpenedAt,
+    [property: JsonPropertyName("closed_at")] DateTimeOffset ClosedAt,
+    [property: JsonPropertyName("status")] CashShiftStatus Status,
+    [property: JsonPropertyName("opening_float")] decimal OpeningFloat,
+    [property: JsonPropertyName("expected_cash")] decimal ExpectedCash,
+    [property: JsonPropertyName("declared_cash")] decimal DeclaredCash,
+    [property: JsonPropertyName("difference")] decimal Difference,
+    [property: JsonPropertyName("card_transaction_count")] int CardTransactionCount,
+    [property: JsonPropertyName("retained_tips")] decimal RetainedTips,
+    [property: JsonPropertyName("message")] string Message);
