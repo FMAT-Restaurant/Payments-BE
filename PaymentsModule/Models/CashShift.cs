@@ -56,3 +56,8 @@ public record CashShiftSummaryResponse(
     [property: JsonPropertyName("ingresos")] CashShiftIncomeBreakdown Income,
     [property: JsonPropertyName("total_esperado_en_caja")] decimal ExpectedCashInDrawer,
     [property: JsonPropertyName("fecha_calculo")] DateTimeOffset CalculatedAt);
+
+public record ActiveCashShiftResponse(
+    [property: JsonPropertyName("cash_shift_id")] Guid CashShiftId,
+    [property: JsonPropertyName("opened_at")] DateTimeOffset OpenedAt,
+    [property: JsonPropertyName("opening_float")] decimal OpeningFloat);

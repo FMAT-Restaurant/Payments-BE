@@ -632,6 +632,86 @@ public class CashShiftServiceTests : IAsyncLifetime
         Assert.Equal("El turno de caja no existe", error.Message);
     }
 
+    [Fact]
+    public async Task Get_active_shift_returns_active_shift_dto_when_open_shift_exists()
+    {
+        var cashier = NewCashier();
+        var opened = await OpenAsync(new OpenCashShiftRequest(1000.00m), cashier);
+
+        var active = await GetActiveShiftAsync(cashier);
+
+        Assert.NotNull(active);
+        Assert.Equal(opened.Response!.CashShiftId, active.CashShiftId);
+        Assert.Equal(1000.00m, active.OpeningFloat);
+        Assert.True(active.OpenedAt <= DateTimeOffset.UtcNow);
+    }
+
+    [Fact]
+    public async Task Get_active_shift_returns_null_when_no_shift_or_only_closed_shifts_exist()
+    {
+        var cashier = NewCashier();
+
+        var nonExistent = await GetActiveShiftAsync(cashier);
+        Assert.Null(nonExistent);
+
+        var opened = await OpenAsync(new OpenCashShiftRequest(500.00m), cashier);
+        await CloseAsync(new CloseCashShiftRequest(500.00m), cashier);
+
+        var closed = await GetActiveShiftAsync(cashier);
+        Assert.Null(closed);
+    }
+
+    [Theory]
+    [InlineData("Cajero", StatusCodes.Status200OK)]
+    [InlineData("Administrador", StatusCodes.Status200OK)]
+    [InlineData("Gerente", StatusCodes.Status200OK)]
+    [InlineData("Admin", StatusCodes.Status200OK)]
+    public async Task Controller_get_active_shift_authorizes_allowed_roles(string role, int expectedStatus)
+    {
+        var cashier = NewCashier();
+        await OpenAsync(new OpenCashShiftRequest(800.00m), cashier);
+
+        var result = await ControllerGetActiveShiftAsync(cashier, role);
+
+        Assert.Equal(expectedStatus, result.StatusCode);
+        var active = Assert.IsType<ActiveCashShiftResponse>(result.Value);
+        Assert.Equal(800.00m, active.OpeningFloat);
+    }
+
+    [Fact]
+    public async Task Controller_get_active_shift_returns_404_when_no_open_shift()
+    {
+        var cashier = NewCashier();
+
+        var result = await ControllerGetActiveShiftAsync(cashier, "Cajero");
+
+        Assert.Equal(StatusCodes.Status404NotFound, result.StatusCode);
+        var error = Assert.IsType<ErrorResponse>(result.Value);
+        Assert.Equal("CASH_SHIFT_NOT_OPEN", error.Code);
+        Assert.Equal("No hay un turno de caja abierto para este usuario", error.Message);
+    }
+
+    [Fact]
+    public async Task Controller_get_active_shift_returns_401_when_anonymous()
+    {
+        var result = await ControllerGetActiveShiftAsync(cashierId: null);
+
+        Assert.Equal(StatusCodes.Status401Unauthorized, result.StatusCode);
+    }
+
+    [Fact]
+    public async Task Controller_get_active_shift_returns_403_when_role_unauthorized()
+    {
+        var cashier = NewCashier();
+        await OpenAsync(new OpenCashShiftRequest(500.00m), cashier);
+
+        var result = await ControllerGetActiveShiftAsync(cashier, role: "Mesero");
+
+        Assert.Equal(StatusCodes.Status403Forbidden, result.StatusCode);
+        var error = Assert.IsType<ErrorResponse>(result.Value);
+        Assert.Equal("FORBIDDEN_ROLE", error.Code);
+    }
+
     private static string NewCashier() => $"cashier-{Guid.NewGuid()}";
 
     private async Task<ShiftSummaryResult> GetSummaryAsync(string cashierId)
@@ -644,6 +724,12 @@ public class CashShiftServiceTests : IAsyncLifetime
     {
         await using var scope = _provider.CreateAsyncScope();
         return await scope.ServiceProvider.GetRequiredService<CashShiftService>().GetSummaryByIdAsync(shiftId);
+    }
+
+    private async Task<ActiveCashShiftResponse?> GetActiveShiftAsync(string cashierId)
+    {
+        await using var scope = _provider.CreateAsyncScope();
+        return await scope.ServiceProvider.GetRequiredService<CashShiftService>().GetActiveShiftAsync(cashierId);
     }
 
     private async Task<OpenShiftResult> OpenAsync(OpenCashShiftRequest request, string cashierId)
@@ -692,6 +778,13 @@ public class CashShiftServiceTests : IAsyncLifetime
         await using var scope = _provider.CreateAsyncScope();
         var controller = CreateController(scope.ServiceProvider, cashierId);
         return ToObjectResult(await controller.GetSummary(CancellationToken.None));
+    }
+
+    private async Task<ObjectResult> ControllerGetActiveShiftAsync(string? cashierId, string? role = "Cajero")
+    {
+        await using var scope = _provider.CreateAsyncScope();
+        var controller = CreateController(scope.ServiceProvider, cashierId, role);
+        return ToObjectResult(await controller.GetMyActiveShift(CancellationToken.None));
     }
 
     private async Task<ObjectResult> ControllerGetSummaryByIdAsync(string cashShiftId, string? role = "Administrador", string? cashierId = "supervisor-user")

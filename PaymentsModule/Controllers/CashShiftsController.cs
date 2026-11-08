@@ -15,6 +15,35 @@ public class CashShiftsController(
     IValidator<OpenCashShiftRequest> openValidator,
     IValidator<CloseCashShiftRequest> closeValidator) : ControllerBase
 {
+    [HttpGet("me")]
+    [ProducesResponseType<ActiveCashShiftResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType<ErrorResponse>(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType<ErrorResponse>(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetMyActiveShift(CancellationToken ct)
+    {
+        // Cashier identity comes only from the JWT claim (AC2).
+        var cashierId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (string.IsNullOrEmpty(cashierId))
+        {
+            return Unauthorized();
+        }
+
+        if (!User.IsInRole("Administrador") && !User.IsInRole("Gerente") && !User.IsInRole("Cajero") && !User.IsInRole("Admin"))
+        {
+            return StatusCode(StatusCodes.Status403Forbidden,
+                new ErrorResponse("FORBIDDEN_ROLE", "No tiene permisos para realizar esta acción."));
+        }
+
+        var shift = await shifts.GetActiveShiftAsync(cashierId, ct);
+        if (shift is null)
+        {
+            return NotFound(new ErrorResponse("CASH_SHIFT_NOT_OPEN", "No hay un turno de caja abierto para este usuario"));
+        }
+
+        return Ok(shift);
+    }
+
     [HttpGet("summary")]
     [ProducesResponseType<CashShiftSummaryResponse>(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]

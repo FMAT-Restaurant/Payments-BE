@@ -167,7 +167,7 @@ Confirmed by the PO (PMC-13-P1 to P9). Most of the behaviour already existed sin
 
 Applies to every endpoint and supersedes the routes and `ProblemDetails` bodies mentioned in the story sections above and below:
 
-- **Routes:** everything lives under `/api/v1/payments`: `POST /charge`, `POST /cash-shifts/open`, `POST /cash-shifts/close`, `GET /cash-shifts/summary`, `GET /cash-shifts/{cash_shift_id}/summary`, `GET /` (history), `GET /{folio}` (detail), `GET /{folio}/ticket` (print), `GET /export`. Literal segments (`charge`, `export`, `cash-shifts`) win over `{folio}`. Query parameter names (`inicio`/`fin`, `fecha_inicio`, ...) and JSON field names move to English in each story's own adecuacion.
+- **Routes:** everything lives under `/api/v1/payments`: `POST /charge`, `POST /cash-shifts/open`, `POST /cash-shifts/close`, `GET /cash-shifts/me`, `GET /cash-shifts/summary`, `GET /cash-shifts/{cash_shift_id}/summary`, `GET /` (history), `GET /{folio}` (detail), `GET /{folio}/ticket` (print), `GET /export`. Literal segments (`charge`, `export`, `cash-shifts`) win over `{folio}`. Query parameter names (`inicio`/`fin`, `fecha_inicio`, ...) and JSON field names move to English in each story's own adecuacion.
 - **Errors:** every non-2xx body with content is `ErrorResponse` `{ "code", "message" }` with the message in Spanish; the Frontend relies on `code` only.
   - `400 VALIDATION_ERROR`: FluentValidation messages joined in one string (`ErrorResponse.Validation`), built-in texts in Spanish (`LanguageManager.Culture = es`) naming the wire field (`DisplayNameResolver` reads `[JsonPropertyName]`); malformed JSON answers `"La solicitud tiene un formato inválido."` (`InvalidModelStateResponseFactory`).
   - `500 INTERNAL_ERROR`: `UseExceptionHandler` answers `"Ocurrió un error interno. Intente de nuevo más tarde."` without internals.
@@ -230,6 +230,20 @@ Agreed while implementing the supervision cash shift summary by id:
 - **Calculation reuse and non-blocking reads (RCSI):** reuses the same SQL aggregation (`CalculateShiftTotalsAsync`) shared between PMC-9 and PMC-8 close reconciliation. Calculates `expected_cash = initial_fund + efectivo recibido − change_given` (with card totalized separately and tips deducted from drawer cash). Pure read-only projection (`AsNoTracking()`) under statement-level snapshot isolation (RCSI), ensuring it does not lock or block concurrent charges in progress on the queried shift.
 - **Parity and coherence with PMC-9:** for an active open shift, the owner cashier calling `GET /api/v1/payments/cash-shifts/summary` and a supervisor calling `GET /api/v1/payments/cash-shifts/{cash_shift_id}/summary` receive identical financial amounts in the shared response contract `CashShiftSummaryResponse`.
 - **Tests:** unit tests in `CashShiftServiceTests` and HTTP pipeline integration tests in `CashShiftSummaryByIdHttpTests` using `PaymentsApiFactory` (`payments_tests_http`), covering open shifts (200), closed shifts (200), unbalanced shifts (200), non-existent shifts (404), cashier forbidden (403), unauthorized (401), invalid GUID format (400), and full parity with PMC-9.
+
+---
+
+## Active Operational Cash Shift Decisions (HU-FE-05 / PMC-8)
+
+Agreed while implementing the active operational shift query for the logged-in user:
+
+- **Route and access:** `GET /api/v1/payments/cash-shifts/me` is protected by `[Authorize]` and accessible to `Administrador`, `Gerente`, `Cajero`, and `Admin`. Requests without a token return `401 Unauthorized`. Callers with unauthorized roles return `403 FORBIDDEN_ROLE` with error response body `{ "code": "FORBIDDEN_ROLE", "message": "No tiene permisos para realizar esta acción." }`.
+- **Strict identity extraction:** user ID is never accepted as a path/query parameter or in the body, nor from client headers (`X-User-Id`). Identity is resolved exclusively from the JWT claim (`NameIdentifier` / `sub`), returning `401` if missing.
+- **Open shift response (200 OK):** if the user has an active shift (`Status = 'Open'`), returns `ActiveCashShiftResponse` in strict snake_case:
+  `{ "cash_shift_id": "uuid", "opened_at": "ISO-8601", "opening_float": 1000.00 }`.
+- **No open shift response (404 Not Found):** if the user has no shift or only closed/unbalanced shifts, returns `404 Not Found` with `{ "code": "CASH_SHIFT_NOT_OPEN", "message": "No hay un turno de caja abierto para este usuario" }`. The Frontend intercepts this status code to trigger the modal for opening a shift and declaring initial cash without receiving generic 500 errors.
+- **Integrity and concurrency:** guaranteed by the filtered unique index `IX_CashShifts_CashierId` (`WHERE [Status] = 'Open'`), ensuring a cashier cannot have more than one open shift concurrently. Read queries use `AsNoTracking()` under statement-level snapshot isolation (RCSI).
+- **Tests:** unit tests in `CashShiftServiceTests` and HTTP integration tests in `ActiveCashShiftHttpTests` covering 200 with snake_case contract, 404 for closed/inexistent shifts, 401 without token, 403 on unauthorized roles, and strict JWT extraction ignoring query params and client headers.
 
 ---
 

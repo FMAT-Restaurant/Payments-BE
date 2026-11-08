@@ -40,6 +40,20 @@ public record ShiftSummaryByIdResult(ShiftSummaryByIdOutcome Outcome, CashShiftS
 
 public class CashShiftService(PaymentsDbContext db)
 {
+    /// <summary>Finds the active open cash shift for the authenticated cashier, if any.</summary>
+    public async Task<ActiveCashShiftResponse?> GetActiveShiftAsync(string cashierId, CancellationToken ct = default)
+    {
+        var shift = await db.CashShifts.AsNoTracking()
+            .SingleOrDefaultAsync(s => s.CashierId == cashierId && s.Status == CashShiftStatus.Open, ct);
+
+        if (shift is null)
+        {
+            return null;
+        }
+
+        return new ActiveCashShiftResponse(shift.Id, shift.OpenedAt, shift.InitialFund);
+    }
+
     /// <summary>Calculates the real-time income summary for the cashier's active open shift without modifying state.</summary>
     public async Task<ShiftSummaryResult> GetSummaryAsync(string cashierId, CancellationToken ct = default)
     {
