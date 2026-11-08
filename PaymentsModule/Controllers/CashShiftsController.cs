@@ -9,7 +9,7 @@ namespace PaymentsModule.Controllers;
 
 [ApiController]
 [Authorize]
-[Route("api/v1/cash-shifts")]
+[Route("api/v1/payments/cash-shifts")]
 public class CashShiftsController(
     CashShiftService shifts,
     IValidator<OpenCashShiftRequest> openValidator,
@@ -18,7 +18,7 @@ public class CashShiftsController(
     [HttpGet("summary")]
     [ProducesResponseType<CashShiftSummaryResponse>(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
-    [ProducesResponseType<ProblemDetails>(StatusCodes.Status404NotFound)]
+    [ProducesResponseType<ErrorResponse>(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> GetSummary(CancellationToken ct)
     {
         // Cashier identity comes only from the JWT forwarded by the API Gateway (RNF-04).
@@ -34,26 +34,20 @@ public class CashShiftsController(
             return Ok(result.Response);
         }
 
-        var problem = new ProblemDetails
-        {
-            Status = StatusCodes.Status404NotFound,
-            Detail = result.Error
-        };
-
-        return new ObjectResult(problem) { StatusCode = problem.Status };
+        return NotFound(new ErrorResponse("CASH_SHIFT_NOT_OPEN", result.Error!));
     }
 
     [HttpPost("open")]
     [ProducesResponseType<OpenCashShiftResponse>(StatusCodes.Status201Created)]
-    [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType<ErrorResponse>(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
-    [ProducesResponseType<ProblemDetails>(StatusCodes.Status409Conflict)]
+    [ProducesResponseType<ErrorResponse>(StatusCodes.Status409Conflict)]
     public async Task<IActionResult> Open(OpenCashShiftRequest request, CancellationToken ct)
     {
         var validation = await openValidator.ValidateAsync(request, ct);
         if (!validation.IsValid)
         {
-            return ValidationProblem(new ValidationProblemDetails(validation.ToDictionary()));
+            return BadRequest(ErrorResponse.Validation(validation));
         }
 
         // Cashier identity comes only from the JWT forwarded by the API Gateway (RNF-04).
@@ -69,26 +63,20 @@ public class CashShiftsController(
             return StatusCode(StatusCodes.Status201Created, result.Response);
         }
 
-        var problem = new ProblemDetails
-        {
-            Status = StatusCodes.Status409Conflict,
-            Detail = result.Error
-        };
-
-        return new ObjectResult(problem) { StatusCode = problem.Status };
+        return Conflict(new ErrorResponse("CASH_SHIFT_ALREADY_OPEN", result.Error!));
     }
 
     [HttpPost("close")]
     [ProducesResponseType<CloseCashShiftResponse>(StatusCodes.Status200OK)]
-    [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType<ErrorResponse>(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
-    [ProducesResponseType<ProblemDetails>(StatusCodes.Status422UnprocessableEntity)]
+    [ProducesResponseType<ErrorResponse>(StatusCodes.Status422UnprocessableEntity)]
     public async Task<IActionResult> Close(CloseCashShiftRequest request, CancellationToken ct)
     {
         var validation = await closeValidator.ValidateAsync(request, ct);
         if (!validation.IsValid)
         {
-            return ValidationProblem(new ValidationProblemDetails(validation.ToDictionary()));
+            return BadRequest(ErrorResponse.Validation(validation));
         }
 
         // Cashier identity comes only from the JWT forwarded by the API Gateway (RNF-04).
@@ -104,13 +92,7 @@ public class CashShiftsController(
             return Ok(result.Response);
         }
 
-        var problem = new ProblemDetails
-        {
-            Status = StatusCodes.Status422UnprocessableEntity,
-            Detail = result.Error
-        };
-
-        return new ObjectResult(problem) { StatusCode = problem.Status };
+        return UnprocessableEntity(new ErrorResponse("CASH_SHIFT_NOT_OPEN", result.Error!));
     }
 }
 

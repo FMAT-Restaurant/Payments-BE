@@ -14,16 +14,16 @@ public class SalesHistoryQueryValidator : AbstractValidator<SalesHistoryQuery>
         RuleFor(x => x.Status)
             .Must(value => WireEnum.TryParse<TransactionStatus>(value, out _))
             .When(x => x.Status is not null)
-            .WithMessage("estado must be COMPLETADO or CANCELADO.");
+            .WithMessage("estado debe ser COMPLETADO o CANCELADO.");
 
         RuleFor(x => x.Method)
             .Must(value => WireEnum.TryParse<PaymentMethod>(value, out _))
             .When(x => x.Method is not null)
-            .WithMessage("metodo_pago must be EFECTIVO, TARJETA_CREDITO or TARJETA_DEBITO.");
+            .WithMessage("metodo_pago debe ser EFECTIVO, TARJETA_CREDITO o TARJETA_DEBITO.");
 
         RuleFor(x => x.From)
             .Must((query, start) => start <= query.To)
             .When(x => x.From.HasValue && x.To.HasValue)
-            .WithMessage("The date range is invalid: fecha_inicio must not be after fecha_fin.");
+            .WithMessage("El rango de fechas no es válido: fecha_inicio no puede ser posterior a fecha_fin.");
     }
 }

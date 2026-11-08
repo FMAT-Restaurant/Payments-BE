@@ -62,7 +62,7 @@ public class SalesExportHttpTests(PaymentsApiFactory api) : IClassFixture<Paymen
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
 
-    // Scenario 2 over HTTP: 400 with the English message, before any query runs.
+    // Scenario 2 over HTTP: 400 with the Spanish message, before any query runs.
     [Fact]
     public async Task Range_longer_than_31_days_returns_400()
     {
@@ -73,7 +73,7 @@ public class SalesExportHttpTests(PaymentsApiFactory api) : IClassFixture<Paymen
         var body = await response.Content.ReadAsStringAsync();
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-        Assert.Contains("The date range cannot exceed 31 days.", body);
+        Assert.Contains("El rango de fechas no puede exceder los 31 días.", body);
     }
 
     // Scenario 3 before anything is sent: the query fails to start, so nothing reached the client and the global
@@ -142,7 +142,7 @@ public class SalesExportHttpTests(PaymentsApiFactory api) : IClassFixture<Paymen
     }
 
     private static string Url(DateTimeOffset start, DateTimeOffset end) =>
-        $"/api/v1/pagos/exportar?inicio={start.UtcDateTime:yyyy-MM-ddTHH:mm:ssZ}&fin={end.UtcDateTime:yyyy-MM-ddTHH:mm:ssZ}";
+        $"/api/v1/payments/export?inicio={start.UtcDateTime:yyyy-MM-ddTHH:mm:ssZ}&fin={end.UtcDateTime:yyyy-MM-ddTHH:mm:ssZ}";
 
     private static DateTimeOffset NextWindow() => FirstWindow.AddDays(100 * Interlocked.Increment(ref _windows));
 

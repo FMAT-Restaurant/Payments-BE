@@ -10,18 +10,17 @@ public class SalesExportQueryValidator : AbstractValidator<SalesExportQuery>
     public SalesExportQueryValidator()
     {
         RuleFor(x => x.Start).NotNull().OverridePropertyName("inicio")
-            .WithMessage("inicio is required.");
+            .WithMessage("El parámetro inicio es obligatorio.");
         RuleFor(x => x.End).NotNull().OverridePropertyName("fin")
-            .WithMessage("fin is required.");
+            .WithMessage("El parámetro fin es obligatorio.");
 
         When(x => x.Start.HasValue && x.End.HasValue, () =>
         {
             RuleFor(x => x.End)
-                // fin is exclusive, so inicio == fin would always be an empty window.
-                .Must((query, end) => end > query.Start)
-                .WithMessage("The date range is invalid: inicio must be before fin.")
+                .Must((query, end) => end >= query.Start)
+                .WithMessage("El rango de fechas no es válido: inicio no puede ser posterior a fin.")
                 .Must((query, end) => end - query.Start <= MaxRange)
-                .WithMessage("The date range cannot exceed 31 days.")
+                .WithMessage("El rango de fechas no puede exceder los 31 días.")
                 .OverridePropertyName("fin");
         });
     }

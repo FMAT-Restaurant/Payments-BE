@@ -89,9 +89,9 @@ public class PrintTicketTests : IAsyncLifetime
         var result = await GetAsync("TX-00000000-000000");
 
         var notFound = Assert.IsType<NotFoundObjectResult>(result);
-        var problem = Assert.IsType<ProblemDetails>(notFound.Value);
-        Assert.Equal(StatusCodes.Status404NotFound, problem.Status);
-        Assert.Equal("The ticket 'TX-00000000-000000' does not exist.", problem.Detail);
+        var error = Assert.IsType<ErrorResponse>(notFound.Value);
+        Assert.Equal("TRANSACTION_NOT_FOUND", error.Code);
+        Assert.Equal("El ticket 'TX-00000000-000000' no existe", error.Message);
     }
 
     // Scenario 3, service side: the exception propagates out of the controller untouched. The 500 answered by

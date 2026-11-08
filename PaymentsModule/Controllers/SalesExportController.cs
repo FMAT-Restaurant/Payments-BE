@@ -8,16 +8,16 @@ namespace PaymentsModule.Controllers;
 
 [ApiController]
 [Authorize(Roles = "Administrador")]
-[Route("api/v1/pagos")]
+[Route("api/v1/payments")]
 public class SalesExportController(
     SalesExportService exports,
     IValidator<SalesExportQuery> validator,
     ILogger<SalesExportController> logger) : ControllerBase
 {
     /// <summary>Streams the sales history of a window of at most 31 days as a CSV attachment.</summary>
-    [HttpGet("exportar")]
+    [HttpGet("export")]
     [ProducesResponseType(typeof(string), StatusCodes.Status200OK, "text/csv")]
-    [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType<ErrorResponse>(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
     public async Task<IActionResult> Export(
@@ -29,7 +29,7 @@ public class SalesExportController(
         var validation = await validator.ValidateAsync(new SalesExportQuery(start, end), ct);
         if (!validation.IsValid)
         {
-            return ValidationProblem(new ValidationProblemDetails(validation.ToDictionary()));
+            return BadRequest(ErrorResponse.Validation(validation));
         }
 
         // No Content-Length: Kestrel sends the body with Transfer-Encoding: chunked.
