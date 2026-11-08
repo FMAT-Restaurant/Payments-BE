@@ -31,6 +31,7 @@ builder.Services.AddScoped<IValidator<DinningSessionReadyEvent>, DinningSessionR
 builder.Services.AddScoped<PendingBillService>();
 builder.Services.AddScoped<IValidator<ChargeRequest>, ChargeRequestValidator>();
 builder.Services.AddScoped<ChargeService>();
+builder.Services.AddSingleton<IChargeCalculationService, ChargeCalculationService>();
 builder.Services.AddScoped<IValidator<OpenCashShiftRequest>, OpenCashShiftRequestValidator>();
 builder.Services.AddScoped<IValidator<CloseCashShiftRequest>, CloseCashShiftRequestValidator>();
 builder.Services.AddScoped<CashShiftService>();

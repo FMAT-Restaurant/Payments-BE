@@ -37,6 +37,7 @@ public class ChargeServiceTests : IAsyncLifetime
             .AddDbContext<PaymentsDbContext>(o => o.UseSqlServer(ConnectionString).AddInterceptors(_failure))
             .AddScoped<PendingBillService>()
             .AddScoped<ChargeService>()
+            .AddSingleton<IChargeCalculationService, ChargeCalculationService>()
             .AddScoped<IValidator<ChargeRequest>, ChargeRequestValidator>()
             .AddMassTransitTestHarness(x =>
             {
@@ -197,6 +198,17 @@ public class ChargeServiceTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Card_covering_full_amount_with_cash_is_rejected()
+    {
+        var (session, cashier) = await ArrangeAsync(billTotal: 100m);
+
+        var result = await ChargeAsync(Request(session, Card(PaymentMethod.CreditCard, 100m), Cash(50m)), cashier);
+
+        Assert.Equal(ChargeOutcome.CardCoversFullAmount, result.Outcome);
+        Assert.Null(await FindAsync(session));
+    }
+
+    [Fact]
     public async Task Rejects_cashier_without_open_shift()
     {
         var (session, _) = await ArrangeAsync(billTotal: 250m);
@@ -229,7 +241,7 @@ public class ChargeServiceTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Controller_maps_outcomes_to_status_codes()
+    public async Task Controller_maps_outcomes_to_error_response_codes()
     {
         var (session, cashier) = await ArrangeAsync(billTotal: 250m);
 
@@ -239,9 +251,20 @@ public class ChargeServiceTests : IAsyncLifetime
         var invalid = await ControllerChargeAsync(Request(session, Cash(0m)), cashier);
         var anonymous = await ControllerChargeAsync(Request(session, Cash(250m)), cashierId: null);
 
+        // 422 INSUFFICIENT_FUNDS with deficit
         Assert.Equal(StatusCodes.Status422UnprocessableEntity, insufficient.StatusCode);
-        Assert.Equal(50m, ((ProblemDetails)insufficient.Value!).Extensions["deficit"]);
+        var insufficientError = Assert.IsType<ErrorResponse>(insufficient.Value);
+        Assert.Equal("INSUFFICIENT_FUNDS", insufficientError.Code);
+        Assert.Equal("El monto de los pagos no cubre el total de la cuenta", insufficientError.Message);
+        Assert.Equal(50m, insufficientError.Deficit);
+
+        // 409 TRANSACTION_ALREADY_PAID
         Assert.Equal(StatusCodes.Status409Conflict, duplicate.StatusCode);
+        var duplicateError = Assert.IsType<ErrorResponse>(duplicate.Value);
+        Assert.Equal("TRANSACTION_ALREADY_PAID", duplicateError.Code);
+        Assert.Equal("La transacción ya ha sido pagada previamente", duplicateError.Message);
+
+        // 400 and 401 remain unchanged
         Assert.Equal(StatusCodes.Status400BadRequest, invalid.StatusCode);
         Assert.Equal(StatusCodes.Status401Unauthorized, anonymous.StatusCode);
     }
@@ -338,7 +361,12 @@ public class ChargeServiceTests : IAsyncLifetime
     private static ChargeRequest Request(Guid session, PaymentRequest payment) =>
         new(session, 0m, [payment], [new ItemSnapshot("Tacos al Pastor", 2, 125m, 250m)]);
 
+    private static ChargeRequest Request(Guid session, params PaymentRequest[] payments) =>
+        new(session, 0m, payments, [new ItemSnapshot("Tacos al Pastor", 2, 125m, 250m)]);
+
     private static PaymentRequest Cash(decimal amount) => new(PaymentMethod.Cash, amount, null);
+
+    private static PaymentRequest Card(PaymentMethod method, decimal amount) => new(method, amount, "AUTH-1");
 
     private sealed class PaymentCompletedListener : IConsumer<PaymentCompletedEvent>
     {
