@@ -57,7 +57,11 @@ public class CashShiftsController(
             return Unauthorized();
         }
 
-        var result = await shifts.OpenAsync(request, cashierId, ct);
+        // PMC-8 AC3: display name from the JWT (OIDC "name", or ClaimTypes.Name when the handler maps "unique_name").
+        // Pending with Auth which claim carries it; null until then.
+        var cashierName = User.FindFirstValue("name") ?? User.FindFirstValue(ClaimTypes.Name);
+
+        var result = await shifts.OpenAsync(request, cashierId, cashierName, ct);
         if (result.Outcome == OpenShiftOutcome.Opened)
         {
             return StatusCode(StatusCodes.Status201Created, result.Response);

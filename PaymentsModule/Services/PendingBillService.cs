@@ -4,7 +4,7 @@ using PaymentsModule.Models;
 
 namespace PaymentsModule.Services;
 
-public class PendingBillService(IDistributedCache cache)
+public class PendingBillService(IDistributedCache cache, IPendingSessionIndex pendingSessions)
 {
     private static readonly DistributedCacheEntryOptions Ttl = new()
     {
@@ -31,6 +31,8 @@ public class PendingBillService(IDistributedCache cache)
 
         await cache.SetStringAsync(BillKey(message.DinningSessionId), JsonSerializer.Serialize(message), Ttl, ct);
         await cache.SetStringAsync(eventKey, "1", Ttl, ct);
+        // Scored by when Pagos saw the change, not by the event timestamp: a late delivery must still show up in PMC-27's ?since.
+        await pendingSessions.AddAsync(message.DinningSessionId, DateTimeOffset.UtcNow);
         return true;
     }
 

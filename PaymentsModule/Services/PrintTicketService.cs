@@ -13,7 +13,7 @@ public class PrintTicketService(PaymentsDbContext db)
     // Pure projection: EF selects only the needed columns and tracks nothing. Lines and payments keep the
     // order they were charged in: ChargeService never sets their ids, so EF Core generates sequential GUIDs
     // that SQL Server sorts in insertion order, and repeated reprints are identical.
-    // Kept separate from TransactionDetailService (GET /api/v1/pagos/{folio}) on purpose: same history, but this
+    // Kept separate from TransactionDetailService (GET /api/v1/payments/{folio}) on purpose: same history, but this
     // is the printer's ESC/POS contract and evolves independently (see AGENTS.md, PMC-14).
     public Task<PrintTicketResponse?> GetAsync(string folio, CancellationToken ct = default) =>
         db.Transactions.AsNoTracking()

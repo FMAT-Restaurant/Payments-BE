@@ -34,6 +34,7 @@ public class CashShiftServiceTests : IAsyncLifetime
         _provider = new ServiceCollection()
             .AddLogging()
             .AddDistributedMemoryCache()
+            .AddSingleton<IPendingSessionIndex, InMemoryPendingSessionIndex>()
             .AddDbContext<PaymentsDbContext>(o => o.UseSqlServer(ConnectionString).AddInterceptors(_failure, _queryFailure, _beforeInsert))
             .AddScoped<PendingBillService>()
             .AddScoped<ChargeService>()
@@ -114,13 +115,12 @@ public class CashShiftServiceTests : IAsyncLifetime
         var cashier = NewCashier();
         var opened = await OpenAsync(new OpenCashShiftRequest(500.00m), cashier);
 
-        // Cash sale: 2000 bill + 50 tip = 2050 paid in cash (net cash sale = 2000; 50 tip goes to waiter).
-        // Card sale: 400 bill + 40 tip = 440 paid by card (net card sale = 400; 40 tip).
-        // Expected cash in drawer = 500 (initial fund) + 2000 (net cash sales) = 2500.00.
+        // PMC-8/PMC-9: the drawer holds every cash amount kept (bill + tip), so expected = 500 + 2050 = 2550.00.
+        // Card amounts (440, tip included) go to card_total and never into the drawer.
         await RecordSaleAsync(cashier, billTotal: 2000.00m, tip: 50.00m, new PaymentRequest(PaymentMethod.Cash, 2050.00m, null));
         await RecordSaleAsync(cashier, billTotal: 400.00m, tip: 40.00m, new PaymentRequest(PaymentMethod.CreditCard, 440.00m, "AUTH-99"));
 
-        var closed = await CloseAsync(new CloseCashShiftRequest(2500.00m), cashier);
+        var closed = await CloseAsync(new CloseCashShiftRequest(2550.00m), cashier);
 
         Assert.Equal(CloseShiftOutcome.Closed, closed.Outcome);
         Assert.NotNull(closed.Response);
@@ -132,9 +132,9 @@ public class CashShiftServiceTests : IAsyncLifetime
         var saved = await FindShiftAsync(opened.Response.CashShiftId);
         Assert.NotNull(saved);
         Assert.Equal(CashShiftStatus.Closed, saved.Status);
-        Assert.Equal(2500.00m, saved.DeclaredCash);
-        Assert.Equal(2500.00m, saved.ExpectedCash);
-        Assert.Equal(400.00m, saved.CardTotal);
+        Assert.Equal(2550.00m, saved.DeclaredCash);
+        Assert.Equal(2550.00m, saved.ExpectedCash);
+        Assert.Equal(440.00m, saved.CardTotal);
         Assert.Equal(90.00m, saved.TipsTotal);
         Assert.Equal(0.00m, saved.Difference);
         Assert.NotNull(saved.ClosedAt);
@@ -320,8 +320,8 @@ public class CashShiftServiceTests : IAsyncLifetime
     [Fact]
     public void Keeps_wire_contract_from_pmc8()
     {
-        const string openJson = """{ "fondo_inicial": 500.00 }""";
-        const string closeJson = """{ "efectivo_declarado": 2500.00 }""";
+        const string openJson = """{ "opening_float": 500.00 }""";
+        const string closeJson = """{ "declared_cash": 2500.00, "reason": "Billete roto" }""";
         var shiftId = Guid.Parse("c92a5b67-8910-4f5c-b1d2-000000000001");
 
         var openReq = JsonSerializer.Deserialize<OpenCashShiftRequest>(openJson)!;
@@ -332,13 +332,14 @@ public class CashShiftServiceTests : IAsyncLifetime
 
         Assert.Equal(500.00m, openReq.InitialFund);
         Assert.Equal(2500.00m, closeReq.DeclaredCash);
-        Assert.Contains("\"turno_caja_id\":\"c92a5b67-8910-4f5c-b1d2-000000000001\"", openRes);
-        Assert.Contains("\"estado\":\"ABIERTO\"", openRes);
-        Assert.Contains("\"mensaje\":\"Turno abierto exitosamente\"", openRes);
-        Assert.Contains("\"estado\":\"CERRADO\"", closeExactRes);
-        Assert.Contains("\"diferencia\":0.00", closeExactRes);
-        Assert.Contains("\"estado\":\"DESCUADRADO\"", closeUnbalancedRes);
-        Assert.Contains("\"diferencia\":-100.00", closeUnbalancedRes);
+        Assert.Equal("Billete roto", closeReq.Reason);
+        Assert.Contains("\"cash_shift_id\":\"c92a5b67-8910-4f5c-b1d2-000000000001\"", openRes);
+        Assert.Contains("\"status\":\"ABIERTO\"", openRes);
+        Assert.Contains("\"message\":\"Turno abierto exitosamente\"", openRes);
+        Assert.Contains("\"status\":\"CERRADO\"", closeExactRes);
+        Assert.Contains("\"difference\":0.00", closeExactRes);
+        Assert.Contains("\"status\":\"DESCUADRADO\"", closeUnbalancedRes);
+        Assert.Contains("\"difference\":-100.00", closeUnbalancedRes);
     }
 
     [Fact]
@@ -378,11 +379,64 @@ public class CashShiftServiceTests : IAsyncLifetime
         Assert.Equal(ShiftSummaryOutcome.Found, summary.Outcome);
         Assert.NotNull(summary.Response);
         Assert.Equal(opened.Response.CashShiftId, summary.Response.CashShiftId);
-        Assert.Equal(CashShiftStatus.Open, summary.Response.ShiftStatus);
-        Assert.Equal(500.00m, summary.Response.InitialFund);
-        Assert.Equal(200.00m, summary.Response.Income.CashCollectedTotal);
-        Assert.Equal(350.00m, summary.Response.Income.CardsTotal);
-        Assert.Equal(700.00m, summary.Response.ExpectedCashInDrawer);
+        Assert.Equal(CashShiftStatus.Open, summary.Response.Status);
+        Assert.Equal(500.00m, summary.Response.OpeningFloat);
+        Assert.Equal(350.00m, summary.Response.CardTotal);
+        Assert.Equal(2, summary.Response.CardTransactionCount);
+        Assert.Equal(700.00m, summary.Response.ExpectedCash);
+    }
+
+    // PMC-9 scenario 1: float 500, 250 cash received for a 200 bill (50 change), 350 by card in 3 payments.
+    [Fact]
+    public async Task Summary_counts_cash_kept_after_change_and_card_payments()
+    {
+        var cashier = NewCashier();
+        await OpenAsync(new OpenCashShiftRequest(500.00m), cashier);
+
+        await RecordSaleAsync(cashier, billTotal: 200.00m, tip: 0.00m, new PaymentRequest(PaymentMethod.Cash, 250.00m, null));
+        await RecordSaleAsync(cashier, billTotal: 100.00m, tip: 0.00m, new PaymentRequest(PaymentMethod.CreditCard, 100.00m, "AUTH-1"));
+        await RecordSaleAsync(cashier, billTotal: 100.00m, tip: 0.00m, new PaymentRequest(PaymentMethod.DebitCard, 100.00m, "AUTH-2"));
+        await RecordSaleAsync(cashier, billTotal: 150.00m, tip: 0.00m, new PaymentRequest(PaymentMethod.CreditCard, 150.00m, "AUTH-3"));
+
+        var summary = (await GetSummaryAsync(cashier)).Response!;
+
+        Assert.Equal("Ana López", summary.CashierName);
+        Assert.Equal(700.00m, summary.ExpectedCash);
+        Assert.Equal(350.00m, summary.CardTotal);
+        Assert.Equal(3, summary.CardTransactionCount);
+        Assert.Equal(0.00m, summary.RetainedTips);
+    }
+
+    [Fact]
+    public async Task Summary_reports_tips_paid_by_card_as_retained()
+    {
+        var cashier = NewCashier();
+        await OpenAsync(new OpenCashShiftRequest(500.00m), cashier);
+
+        await RecordSaleAsync(cashier, billTotal: 100.00m, tip: 10.00m, new PaymentRequest(PaymentMethod.CreditCard, 110.00m, "AUTH-1"));
+        await RecordSaleAsync(cashier, billTotal: 200.00m, tip: 15.00m, new PaymentRequest(PaymentMethod.DebitCard, 215.00m, "AUTH-2"));
+        // A cash tip is already in the waiter's hand, so it is not retained.
+        await RecordSaleAsync(cashier, billTotal: 50.00m, tip: 5.00m, new PaymentRequest(PaymentMethod.Cash, 55.00m, null));
+
+        var summary = (await GetSummaryAsync(cashier)).Response!;
+
+        Assert.Equal(25.00m, summary.RetainedTips);
+        Assert.Equal(325.00m, summary.CardTotal);
+        Assert.Equal(555.00m, summary.ExpectedCash);
+    }
+
+    [Fact]
+    public async Task Closing_shift_stores_trimmed_reason_and_cashier_name()
+    {
+        var cashier = NewCashier();
+        var opened = await OpenAsync(new OpenCashShiftRequest(500.00m), cashier);
+
+        await CloseAsync(new CloseCashShiftRequest(480.00m, "  Billete falso  "), cashier);
+
+        var saved = await FindShiftAsync(opened.Response!.CashShiftId);
+        Assert.Equal("Ana López", saved!.CashierName);
+        Assert.Equal("Billete falso", saved.CloseReason);
+        Assert.Equal(CashShiftStatus.Unbalanced, saved.Status);
     }
 
     [Fact]
@@ -455,16 +509,14 @@ public class CashShiftServiceTests : IAsyncLifetime
         // While the mixed payment is still uncommitted, GetSummaryAsync reads only committed data.
         var duringInFlight = await GetSummaryAsync(cashier);
         Assert.Equal(ShiftSummaryOutcome.Found, duringInFlight.Outcome);
-        Assert.Equal(200.00m, duringInFlight.Response!.Income.CashCollectedTotal);
-        Assert.Equal(0.00m, duringInFlight.Response.Income.CardsTotal);
-        Assert.Equal(700.00m, duringInFlight.Response.ExpectedCashInDrawer);
+        Assert.Equal(0.00m, duringInFlight.Response!.CardTotal);
+        Assert.Equal(700.00m, duringInFlight.Response.ExpectedCash);
 
         await uncommittedTx.CommitAsync();
 
         var afterCommit = await GetSummaryAsync(cashier);
-        Assert.Equal(320.00m, afterCommit.Response!.Income.CashCollectedTotal);
-        Assert.Equal(180.00m, afterCommit.Response.Income.CardsTotal);
-        Assert.Equal(820.00m, afterCommit.Response.ExpectedCashInDrawer);
+        Assert.Equal(180.00m, afterCommit.Response!.CardTotal);
+        Assert.Equal(820.00m, afterCommit.Response.ExpectedCash);
     }
 
     [Fact]
@@ -474,21 +526,12 @@ public class CashShiftServiceTests : IAsyncLifetime
         var calculatedAt = DateTimeOffset.Parse("2026-09-29T17:35:00Z");
 
         var json = JsonSerializer.Serialize(new CashShiftSummaryResponse(
-            shiftId,
-            CashShiftStatus.Open,
-            500.00m,
-            new CashShiftIncomeBreakdown(200.00m, 350.00m),
-            700.00m,
-            calculatedAt));
+            shiftId, "Ana López", CashShiftStatus.Open, calculatedAt.AddHours(-8),
+            500.00m, 700.00m, 350.00m, 3, 12.50m, calculatedAt));
 
-        Assert.Contains("\"turno_caja_id\":\"c92a5b67-8910-4f5c-b1d2-000000000001\"", json);
-        Assert.Contains("\"estado_turno\":\"ABIERTO\"", json);
-        Assert.Contains("\"fondo_inicial\":500.00", json);
-        Assert.Contains("\"ingresos\":{", json);
-        Assert.Contains("\"total_efectivo_cobrado\":200.00", json);
-        Assert.Contains("\"total_tarjetas\":350.00", json);
-        Assert.Contains("\"total_esperado_en_caja\":700.00", json);
-        Assert.Contains("\"fecha_calculo\":\"2026-09-29T17:35:00", json);
+        Assert.Equal(
+            """{"cash_shift_id":"c92a5b67-8910-4f5c-b1d2-000000000001","cashier_name":"Ana L\u00F3pez","status":"ABIERTO","opened_at":"2026-09-29T09:35:00+00:00","opening_float":500.00,"expected_cash":700.00,"card_total":350.00,"card_transaction_count":3,"retained_tips":12.50,"calculated_at":"2026-09-29T17:35:00+00:00"}""",
+            json);
     }
 
     private static string NewCashier() => $"cashier-{Guid.NewGuid()}";
@@ -502,7 +545,7 @@ public class CashShiftServiceTests : IAsyncLifetime
     private async Task<OpenShiftResult> OpenAsync(OpenCashShiftRequest request, string cashierId)
     {
         await using var scope = _provider.CreateAsyncScope();
-        return await scope.ServiceProvider.GetRequiredService<CashShiftService>().OpenAsync(request, cashierId);
+        return await scope.ServiceProvider.GetRequiredService<CashShiftService>().OpenAsync(request, cashierId, "Ana López");
     }
 
     private async Task<CloseShiftResult> CloseAsync(CloseCashShiftRequest request, string cashierId)
@@ -531,11 +574,7 @@ public class CashShiftServiceTests : IAsyncLifetime
             new BillTotals(billTotal, 0m, billTotal)));
 
         var actualPayment = payment ?? new PaymentRequest(PaymentMethod.Cash, billTotal + tip, null);
-        var request = new ChargeRequest(
-            session,
-            tip,
-            [actualPayment],
-            [new ItemSnapshot("Tacos al Pastor", 1, billTotal, billTotal)]);
+        var request = new ChargeRequest(session, tip, [actualPayment]);
 
         return await scope.ServiceProvider.GetRequiredService<ChargeService>().ChargeAsync(request, cashierId);
     }

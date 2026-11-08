@@ -17,6 +17,7 @@ public class DinningSessionReadyConsumerTests : IAsyncLifetime
         .AddDistributedMemoryCache()
         .AddScoped<IValidator<DinningSessionReadyEvent>, DinningSessionReadyEventValidator>()
         .AddScoped<PendingBillService>()
+        .AddSingleton<IPendingSessionIndex, InMemoryPendingSessionIndex>()
         .AddMassTransitTestHarness(x => x.AddConsumer<DinningSessionReadyConsumer, DinningSessionReadyConsumerDefinition>())
         .BuildServiceProvider(true);
 
@@ -34,7 +35,11 @@ public class DinningSessionReadyConsumerTests : IAsyncLifetime
         var fault = await PublishAsync(message);
 
         Assert.Null(fault);
-        Assert.Equal(237.80m, (await GetAsync(message.DinningSessionId))?.Totals.ExpectedTotal);
+        var saved = await GetAsync(message.DinningSessionId);
+        Assert.Equal(237.80m, saved?.Totals.ExpectedTotal);
+        Assert.Equal(("Mesa 04", "Juan Pérez", "ORD-000123"), (saved!.TableName, saved.WaiterName, saved.OrderFolio));
+        // PMC-27 lists pending sessions from this index.
+        Assert.True(((InMemoryPendingSessionIndex)_provider.GetRequiredService<IPendingSessionIndex>()).Contains(message.DinningSessionId));
     }
 
     [Fact]
@@ -102,7 +107,7 @@ public class DinningSessionReadyConsumerTests : IAsyncLifetime
     {
         var json = JsonSerializer.Serialize(NewEvent(Guid.NewGuid(), 100m), SystemTextJsonMessageSerializer.Options);
 
-        foreach (var name in new[] { "mesaId", "meseroId", "totales", "totalEsperado", "impuestos", "platilloId", "nombre", "cantidad", "precioUnitario", "importe" })
+        foreach (var name in new[] { "mesaId", "meseroId", "totales", "totalEsperado", "impuestos", "platilloId", "nombre", "cantidad", "precioUnitario", "importe", "tableName", "waiterName", "orderFolio" })
         {
             Assert.Contains($"\"{name}\"", json);
         }
@@ -139,5 +144,8 @@ public class DinningSessionReadyConsumerTests : IAsyncLifetime
         Guid.NewGuid(),
         DateTimeOffset.UtcNow,
         [new BillItem(Guid.NewGuid(), "Tacos al Pastor", 2, 60m, 120m)],
-        new BillTotals(total, 0m, total));
+        new BillTotals(total, 0m, total),
+        TableName: "Mesa 04",
+        WaiterName: "Juan Pérez",
+        OrderFolio: "ORD-000123");
 }

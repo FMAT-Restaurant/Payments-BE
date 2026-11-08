@@ -47,6 +47,7 @@ public class PaymentsController(ChargeService charges, IValidator<ChargeRequest>
             ChargeOutcome.AlreadyPaid => ("TRANSACTION_ALREADY_PAID", StatusCodes.Status409Conflict),
             ChargeOutcome.BillNotFound => ("BILL_NOT_FOUND", StatusCodes.Status404NotFound),
             ChargeOutcome.NoOpenShift => ("CASH_SHIFT_NOT_OPEN", StatusCodes.Status403Forbidden),
+            ChargeOutcome.AuthorizationReferenceRequired => ("AUTHORIZATION_REFERENCE_REQUIRED", StatusCodes.Status422UnprocessableEntity),
             ChargeOutcome.InsufficientFunds => ("INSUFFICIENT_FUNDS", StatusCodes.Status422UnprocessableEntity),
             ChargeOutcome.ElectronicOverpayment => ("CARD_AMOUNT_EXCEEDS_BALANCE", StatusCodes.Status422UnprocessableEntity),
             ChargeOutcome.CardCoversFullAmount => ("CARD_COVERS_FULL_AMOUNT", StatusCodes.Status422UnprocessableEntity),

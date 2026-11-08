@@ -30,9 +30,14 @@ public enum ShiftSummaryOutcome
 
 public record ShiftSummaryResult(ShiftSummaryOutcome Outcome, CashShiftSummaryResponse? Response = null, string? Error = null);
 
+/// <summary>Shift totals shared by the summary (PMC-9), the close (PMC-8) and later PMC-16/PMC-32. Amounts in <see cref="decimal"/>.</summary>
+/// <param name="CashTotal">Cash kept in the drawer: cash received minus change given (the capped cash breakdowns).</param>
+/// <param name="RetainedTips">Tip share paid by card, proportional to each card amount (PMC-9 AC3, pending PO confirmation).</param>
+public record ShiftTotals(decimal CashTotal, decimal CardTotal, int CardTransactionCount, decimal RetainedTips, decimal TipsTotal);
+
 public class CashShiftService(PaymentsDbContext db)
 {
-    /// <summary>Calculates the real-time income summary for the cashier's active open shift without modifying state.</summary>
+    /// <summary>Calculates the real-time summary of the cashier's open shift without modifying state.</summary>
     public async Task<ShiftSummaryResult> GetSummaryAsync(string cashierId, CancellationToken ct = default)
     {
         var shift = await db.CashShifts.AsNoTracking()
@@ -42,20 +47,26 @@ public class CashShiftService(PaymentsDbContext db)
             return new(ShiftSummaryOutcome.NoOpenShift, Error: "No hay un turno de caja abierto para este usuario");
         }
 
-        var (cashSales, cardTotal, _) = await CalculateShiftTotalsAsync(shift.Id, ct);
-        var expectedCash = shift.InitialFund + cashSales;
+        var totals = await CalculateShiftTotalsAsync(shift.Id, ct);
 
         return new(ShiftSummaryOutcome.Found, new CashShiftSummaryResponse(
             shift.Id,
+            shift.CashierName,
             shift.Status,
+            shift.OpenedAt,
             shift.InitialFund,
-            new CashShiftIncomeBreakdown(cashSales, cardTotal),
-            expectedCash,
+            ExpectedCash(shift, totals),
+            totals.CardTotal,
+            totals.CardTransactionCount,
+            totals.RetainedTips,
             DateTimeOffset.UtcNow));
     }
 
-    /// <summary>Opens a new cash shift for the cashier. <paramref name="cashierId"/> must come from the caller's JWT, never from the payload.</summary>
-    public async Task<OpenShiftResult> OpenAsync(OpenCashShiftRequest request, string cashierId, CancellationToken ct = default)
+    /// <summary>
+    /// Opens a new cash shift. <paramref name="cashierId"/> and <paramref name="cashierName"/> must come from the caller's JWT,
+    /// never from the payload.
+    /// </summary>
+    public async Task<OpenShiftResult> OpenAsync(OpenCashShiftRequest request, string cashierId, string? cashierName, CancellationToken ct = default)
     {
         if (await db.CashShifts.AnyAsync(s => s.CashierId == cashierId && s.Status == CashShiftStatus.Open, ct))
         {
@@ -65,6 +76,7 @@ public class CashShiftService(PaymentsDbContext db)
         var shift = new CashShift
         {
             CashierId = cashierId,
+            CashierName = cashierName,
             InitialFund = request.InitialFund!.Value,
             Status = CashShiftStatus.Open,
             OpenedAt = DateTimeOffset.UtcNow
@@ -100,17 +112,18 @@ public class CashShiftService(PaymentsDbContext db)
             return NoOpenShift();
         }
 
-        var (cashSales, cardTotal, tipsTotal) = await CalculateShiftTotalsAsync(shift.Id, ct);
+        var totals = await CalculateShiftTotalsAsync(shift.Id, ct);
 
         var declaredCash = request.DeclaredCash!.Value;
-        var expectedCash = shift.InitialFund + cashSales;
+        var expectedCash = ExpectedCash(shift, totals);
         var difference = declaredCash - expectedCash;
 
         shift.DeclaredCash = declaredCash;
         shift.ExpectedCash = expectedCash;
-        shift.CardTotal = cardTotal;
-        shift.TipsTotal = tipsTotal;
+        shift.CardTotal = totals.CardTotal;
+        shift.TipsTotal = totals.TipsTotal;
         shift.Difference = difference;
+        shift.CloseReason = string.IsNullOrWhiteSpace(request.Reason) ? null : request.Reason.Trim();
         shift.Status = difference == 0m ? CashShiftStatus.Closed : CashShiftStatus.Unbalanced;
         shift.ClosedAt = DateTimeOffset.UtcNow;
 
@@ -136,34 +149,36 @@ public class CashShiftService(PaymentsDbContext db)
             shift.Id, shift.Status, difference, message));
     }
 
-    private async Task<(decimal CashSales, decimal CardTotal, decimal TipsTotal)> CalculateShiftTotalsAsync(Guid shiftId, CancellationToken ct)
+    /// <summary>
+    /// PMC-9 AC2: expected_cash = opening_float + cash received - change_given. Cash breakdowns are already capped to
+    /// what the bill needed (received - change), so their sum is exactly the cash that stayed in the drawer, tips included.
+    /// </summary>
+    private static decimal ExpectedCash(CashShift shift, ShiftTotals totals) => shift.InitialFund + totals.CashTotal;
+
+    /// <summary>One server-side aggregation over the shift's completed payments: no transaction is loaded into memory.</summary>
+    private async Task<ShiftTotals> CalculateShiftTotalsAsync(Guid shiftId, CancellationToken ct)
     {
         var totals = await db.Transactions.AsNoTracking()
             .Where(t => t.CashShiftId == shiftId && t.Status == TransactionStatus.Completed)
-            .Select(t => new
-            {
-                RawCash = t.Payments.Where(p => p.Method == PaymentMethod.Cash).Sum(p => (decimal?)p.Amount) ?? 0m,
-                RawCard = t.Payments.Where(p => p.Method != PaymentMethod.Cash).Sum(p => (decimal?)p.Amount) ?? 0m,
-                t.Tip
-            })
+            .SelectMany(t => t.Payments.Select(p => new { p.Method, p.Amount, t.Tip, t.Total }))
             .GroupBy(_ => 1)
             .Select(g => new
             {
-                RawCash = g.Sum(x => x.RawCash),
-                RawCard = g.Sum(x => x.RawCard),
-                TipsTotal = g.Sum(x => x.Tip),
-                CashTips = g.Sum(x => x.RawCash >= x.Tip ? x.Tip : x.RawCash)
+                Cash = g.Sum(x => x.Method == PaymentMethod.Cash ? x.Amount : 0m),
+                Card = g.Sum(x => x.Method != PaymentMethod.Cash ? x.Amount : 0m),
+                CardCount = g.Sum(x => x.Method != PaymentMethod.Cash ? 1 : 0),
+                // Each payment carries the tip in proportion to its amount; Total > 0 always, since it is the sum of payments.
+                CardTips = g.Sum(x => x.Method != PaymentMethod.Cash ? x.Tip * x.Amount / x.Total : 0m),
+                Tips = g.Sum(x => x.Tip * x.Amount / x.Total)
             })
             .SingleOrDefaultAsync(ct);
 
-        var rawCash = totals?.RawCash ?? 0m;
-        var rawCard = totals?.RawCard ?? 0m;
-        var tipsTotal = totals?.TipsTotal ?? 0m;
-        var cashTips = totals?.CashTips ?? 0m;
-        var cardTips = tipsTotal - cashTips;
-
-        return (rawCash - cashTips, rawCard - cardTips, tipsTotal);
+        return totals is null
+            ? new ShiftTotals(0m, 0m, 0, 0m, 0m)
+            : new ShiftTotals(totals.Cash, totals.Card, totals.CardCount, Money(totals.CardTips), Money(totals.Tips));
     }
+
+    private static decimal Money(decimal amount) => Math.Round(amount, 2, MidpointRounding.AwayFromZero);
 
     private static OpenShiftResult AlreadyOpen() =>
         new(OpenShiftOutcome.AlreadyOpen, Error: "Ya existe un turno de caja abierto");
@@ -171,4 +186,3 @@ public class CashShiftService(PaymentsDbContext db)
     private static CloseShiftResult NoOpenShift() =>
         new(CloseShiftOutcome.NoOpenShift, Error: "No hay un turno de caja abierto para este usuario");
 }
-

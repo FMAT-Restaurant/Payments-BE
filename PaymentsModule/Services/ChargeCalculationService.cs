@@ -5,6 +5,7 @@ namespace PaymentsModule.Services;
 public enum ChargeCalculationStatus
 {
     Covered,
+    AuthorizationReferenceRequired,
     InsufficientFunds,
     ElectronicOverpayment,
     CardCoversFullAmount
@@ -22,7 +23,7 @@ public record ChargeCalculation(
     decimal ChangeGiven,
     decimal Deficit);
 
-/// <summary>Pure charge math (PMC-13): change calculation and the capped payment split. No I/O.</summary>
+/// <summary>Pure charge rules (PMC-7, PMC-13): card reference, change calculation and the capped payment split. No I/O.</summary>
 public interface IChargeCalculationService
 {
     ChargeCalculation Calculate(IEnumerable<PaymentRequest> payments, decimal amountDue);
@@ -33,6 +34,13 @@ public class ChargeCalculationService : IChargeCalculationService
     public ChargeCalculation Calculate(IEnumerable<PaymentRequest> payments, decimal amountDue)
     {
         var received = payments.ToList();
+
+        // PMC-7 AC2: the card is charged on the physical terminal, so its reference is the only proof of payment.
+        if (received.Any(p => p.Method != PaymentMethod.Cash && string.IsNullOrWhiteSpace(p.AuthorizationReference)))
+        {
+            return new(ChargeCalculationStatus.AuthorizationReferenceRequired, [], 0m, 0m);
+        }
+
         var total = received.Sum(p => p.Amount);
         if (total < amountDue)
         {
