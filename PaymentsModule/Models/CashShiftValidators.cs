@@ -15,6 +15,7 @@ public class CloseCashShiftRequestValidator : AbstractValidator<CloseCashShiftRe
     public CloseCashShiftRequestValidator()
     {
         RuleFor(x => x.DeclaredCash).NotNull().GreaterThanOrEqualTo(0m).PrecisionScale(18, 2, true);
+        RuleFor(x => x.Reason).MaximumLength(500);
     }
 }
 

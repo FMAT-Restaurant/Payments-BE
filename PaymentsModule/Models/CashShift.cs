@@ -6,12 +6,19 @@ public class CashShift
 {
     public Guid Id { get; set; }
     public required string CashierId { get; set; }
+
+    /// <summary>Display name from the JWT at opening (PMC-8 AC3); null while Auth does not send the claim.</summary>
+    public string? CashierName { get; set; }
+
     public decimal InitialFund { get; set; }
     public decimal? DeclaredCash { get; set; }
     public decimal? ExpectedCash { get; set; }
     public decimal? CardTotal { get; set; }
     public decimal? TipsTotal { get; set; }
     public decimal? Difference { get; set; }
+
+    /// <summary>Optional reason sent by the cashier at close, usually for an unbalanced count (PMC-8 AC6).</summary>
+    public string? CloseReason { get; set; }
     public CashShiftStatus Status { get; set; } = CashShiftStatus.Open;
     public DateTimeOffset OpenedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset? ClosedAt { get; set; }
@@ -28,31 +35,33 @@ public enum CashShiftStatus
     [JsonStringEnumMemberName("DESCUADRADO")] Unbalanced
 }
 
+// Wire contract of PMC-8 and PMC-9 (05/11/2026): English snake_case.
 public record OpenCashShiftRequest(
-    [property: JsonPropertyName("fondo_inicial")] decimal? InitialFund);
+    [property: JsonPropertyName("opening_float")] decimal? InitialFund);
 
 public record OpenCashShiftResponse(
-    [property: JsonPropertyName("turno_caja_id")] Guid CashShiftId,
-    [property: JsonPropertyName("estado")] CashShiftStatus Status,
-    [property: JsonPropertyName("mensaje")] string Message);
+    [property: JsonPropertyName("cash_shift_id")] Guid CashShiftId,
+    [property: JsonPropertyName("status")] CashShiftStatus Status,
+    [property: JsonPropertyName("message")] string Message);
 
 public record CloseCashShiftRequest(
-    [property: JsonPropertyName("efectivo_declarado")] decimal? DeclaredCash);
+    [property: JsonPropertyName("declared_cash")] decimal? DeclaredCash,
+    [property: JsonPropertyName("reason")] string? Reason = null);
 
 public record CloseCashShiftResponse(
-    [property: JsonPropertyName("turno_caja_id")] Guid CashShiftId,
-    [property: JsonPropertyName("estado")] CashShiftStatus Status,
-    [property: JsonPropertyName("diferencia")] decimal Difference,
-    [property: JsonPropertyName("mensaje")] string Message);
-
-public record CashShiftIncomeBreakdown(
-    [property: JsonPropertyName("total_efectivo_cobrado")] decimal CashCollectedTotal,
-    [property: JsonPropertyName("total_tarjetas")] decimal CardsTotal);
+    [property: JsonPropertyName("cash_shift_id")] Guid CashShiftId,
+    [property: JsonPropertyName("status")] CashShiftStatus Status,
+    [property: JsonPropertyName("difference")] decimal Difference,
+    [property: JsonPropertyName("message")] string Message);
 
 public record CashShiftSummaryResponse(
-    [property: JsonPropertyName("turno_caja_id")] Guid CashShiftId,
-    [property: JsonPropertyName("estado_turno")] CashShiftStatus ShiftStatus,
-    [property: JsonPropertyName("fondo_inicial")] decimal InitialFund,
-    [property: JsonPropertyName("ingresos")] CashShiftIncomeBreakdown Income,
-    [property: JsonPropertyName("total_esperado_en_caja")] decimal ExpectedCashInDrawer,
-    [property: JsonPropertyName("fecha_calculo")] DateTimeOffset CalculatedAt);
+    [property: JsonPropertyName("cash_shift_id")] Guid CashShiftId,
+    [property: JsonPropertyName("cashier_name")] string? CashierName,
+    [property: JsonPropertyName("status")] CashShiftStatus Status,
+    [property: JsonPropertyName("opened_at")] DateTimeOffset OpenedAt,
+    [property: JsonPropertyName("opening_float")] decimal OpeningFloat,
+    [property: JsonPropertyName("expected_cash")] decimal ExpectedCash,
+    [property: JsonPropertyName("card_total")] decimal CardTotal,
+    [property: JsonPropertyName("card_transaction_count")] int CardTransactionCount,
+    [property: JsonPropertyName("retained_tips")] decimal RetainedTips,
+    [property: JsonPropertyName("calculated_at")] DateTimeOffset CalculatedAt);

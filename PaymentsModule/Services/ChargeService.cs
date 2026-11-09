@@ -13,6 +13,7 @@ public enum ChargeOutcome
     AlreadyPaid,
     BillNotFound,
     NoOpenShift,
+    AuthorizationReferenceRequired,
     InsufficientFunds,
     ElectronicOverpayment,
     CardCoversFullAmount
@@ -20,7 +21,13 @@ public enum ChargeOutcome
 
 public record ChargeResult(ChargeOutcome Outcome, ChargeResponse? Response = null, string? Error = null, decimal? Deficit = null);
 
-public class ChargeService(PaymentsDbContext db, PendingBillService bills, IPublishEndpoint publishEndpoint, IChargeCalculationService calculator)
+public class ChargeService(
+    PaymentsDbContext db,
+    PendingBillService bills,
+    IPendingSessionIndex pendingSessions,
+    IPublishEndpoint publishEndpoint,
+    IChargeCalculationService calculator,
+    ILogger<ChargeService> logger)
 {
     /// <summary>Charges a pending bill. <paramref name="cashierId"/> must come from the caller's JWT, never from the payload.</summary>
     public async Task<ChargeResult> ChargeAsync(ChargeRequest request, string cashierId, CancellationToken ct = default)
@@ -31,7 +38,7 @@ public class ChargeService(PaymentsDbContext db, PendingBillService bills, IPubl
             return AlreadyPaid();
         }
 
-        // The pending bill from Órdenes (PMC-5) is the source of truth for prices; the client snapshot is not trusted.
+        // The pending bill from Órdenes (PMC-5) is the only source of prices: the client never sends items (PMC-6).
         var bill = await bills.GetAsync(request.DinningSessionId, ct);
         if (bill is null)
         {
@@ -42,6 +49,8 @@ public class ChargeService(PaymentsDbContext db, PendingBillService bills, IPubl
         var calculation = calculator.Calculate(request.Payments, total);
         switch (calculation.Status)
         {
+            case ChargeCalculationStatus.AuthorizationReferenceRequired:
+                return new(ChargeOutcome.AuthorizationReferenceRequired, Error: "La referencia de autorización es obligatoria para pagos con tarjeta");
             case ChargeCalculationStatus.InsufficientFunds:
                 return new(ChargeOutcome.InsufficientFunds, Error: "El monto de los pagos no cubre el total de la cuenta", Deficit: calculation.Deficit);
             case ChargeCalculationStatus.ElectronicOverpayment:
@@ -68,10 +77,12 @@ public class ChargeService(PaymentsDbContext db, PendingBillService bills, IPubl
             DinningSessionId = request.DinningSessionId,
             CashShiftId = shift.Id,
             CashierId = cashierId,
+            TableName = bill.TableName,
             Subtotal = bill.Totals.Subtotal,
             Taxes = bill.Totals.Taxes,
             Tip = request.Tip,
             Total = total,
+            ChangeGiven = calculation.ChangeGiven,
             Status = TransactionStatus.Completed,
             CreatedAt = DateTimeOffset.UtcNow,
             Items = bill.Items.Select(i => new TransactionItem
@@ -84,12 +95,13 @@ public class ChargeService(PaymentsDbContext db, PendingBillService bills, IPubl
             Payments = calculation.Breakdown.ToList()
         };
 
-        // Not composable: SQL Server rejects NEXT VALUE FOR inside the subquery EF would wrap around SingleAsync.
+        // Number: global sequence that keeps the sale order for history and export. Not composable: SQL Server rejects
+        // NEXT VALUE FOR inside the subquery EF would wrap around SingleAsync.
         transaction.Number = (await db.Database
             .SqlQueryRaw<long>($"SELECT NEXT VALUE FOR {PaymentsDbContext.FolioSequence} AS Value")
             .ToListAsync(ct)).Single();
-        // ponytail: global sequence and UTC date, so the number does not restart daily; switch to a per-day counter if the business asks for it.
-        transaction.Folio = $"TX-{transaction.CreatedAt:yyyyMMdd}-{transaction.Number:D6}";
+        var day = DateOnly.FromDateTime(transaction.CreatedAt.UtcDateTime);
+        transaction.Folio = $"TX-{day:yyyyMMdd}-{await NextDailyNumberAsync(db, day, ct):D6}";
         db.Transactions.Add(transaction);
 
         // Stored in the outbox within this DB transaction; MassTransit delivers it only after COMMIT.
@@ -109,10 +121,34 @@ public class ChargeService(PaymentsDbContext db, PendingBillService bills, IPubl
 
         await dbTransaction.CommitAsync(ct);
 
-        // Change is only returned in the response, never persisted (PMC-13-P7).
+        try
+        {
+            await pendingSessions.RemoveAsync(request.DinningSessionId);
+        }
+        // The sale is committed: a Redis failure must not turn it into a 500. The idempotency check keeps a stale entry harmless.
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning(ex, "Could not remove session {DinningSessionId} from the pending index", request.DinningSessionId);
+        }
+
         return new(ChargeOutcome.Completed, new ChargeResponse(
             transaction.Folio, transaction.Total, transaction.Status, calculation.ChangeGiven, "Cobro procesado exitosamente"));
     }
+
+    /// <summary>
+    /// Next folio number of <paramref name="day"/> (PMC-6 AC3): starts at 1 every day and is atomic under concurrency.
+    /// Runs inside the caller's transaction, so a rolled back charge gives its number back.
+    /// </summary>
+    // ponytail: the counter row stays locked until the charge commits, so charges of the same day are serialized for
+    // a few milliseconds; move to Redis INCR (accepting gaps) if throughput ever matters.
+    public static async Task<int> NextDailyNumberAsync(PaymentsDbContext db, DateOnly day, CancellationToken ct = default) =>
+        (await db.Database.SqlQuery<int>($"""
+            MERGE FolioCounters WITH (HOLDLOCK) AS c
+            USING (SELECT {day} AS Day) AS d ON c.Day = d.Day
+            WHEN MATCHED THEN UPDATE SET LastNumber = c.LastNumber + 1
+            WHEN NOT MATCHED THEN INSERT (Day, LastNumber) VALUES (d.Day, 1)
+            OUTPUT inserted.LastNumber AS Value;
+            """).ToListAsync(ct)).Single();
 
     private static ChargeResult AlreadyPaid() =>
         new(ChargeOutcome.AlreadyPaid, Error: "La transacción ya ha sido pagada previamente");

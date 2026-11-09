@@ -13,7 +13,11 @@ public record DinningSessionReadyEvent(
     [property: JsonPropertyName("meseroId")] Guid WaiterId,
     DateTimeOffset Timestamp,
     IReadOnlyList<BillItem> Items,
-    [property: JsonPropertyName("totales")] BillTotals Totals);
+    [property: JsonPropertyName("totales")] BillTotals Totals,
+    // PMC-5 (08/11/2026): display data for the cash desk; null until Órdenes publishes them.
+    string? TableName = null,
+    string? WaiterName = null,
+    string? OrderFolio = null);
 
 public record BillItem(
     [property: JsonPropertyName("platilloId")] Guid DishId,

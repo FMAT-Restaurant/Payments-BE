@@ -62,6 +62,7 @@ public class ChangeCalculationTests : IClassFixture<PaymentsApiFactory>, IAsyncL
         services.AddSingleton(_cache);
         services.AddDbContext<PaymentsDbContext>(o => o.UseSqlServer(ConnectionString).AddInterceptors(_timeout));
         services.AddScoped<PendingBillService>();
+        services.AddSingleton<IPendingSessionIndex, InMemoryPendingSessionIndex>();
         services.AddScoped<ChargeService>();
         services.AddSingleton<IChargeCalculationService, ChargeCalculationService>();
         services.AddScoped<IValidator<ChargeRequest>, ChargeRequestValidator>();
@@ -95,7 +96,7 @@ public class ChangeCalculationTests : IClassFixture<PaymentsApiFactory>, IAsyncL
 
     // Serialized by MVC in the real pipeline, so a change in Program.cs's JsonOptions breaks this test.
     [Fact]
-    public async Task Scenario1_response_carries_cambio_entregado_on_the_wire()
+    public async Task Scenario1_response_carries_change_given_on_the_wire()
     {
         var (session, cashier) = await ArrangeAsync(billTotal: 80m, _api.Services);
 
@@ -103,7 +104,7 @@ public class ChangeCalculationTests : IClassFixture<PaymentsApiFactory>, IAsyncL
 
         Assert.Equal(HttpStatusCode.Created, status);
         using var document = JsonDocument.Parse(body);
-        Assert.Equal(20.00m, document.RootElement.GetProperty("cambio_entregado").GetDecimal());
+        Assert.Equal(20.00m, document.RootElement.GetProperty("change_given").GetDecimal());
         Assert.Equal(80m, document.RootElement.GetProperty("total").GetDecimal());
         Assert.Equal("COMPLETADO", document.RootElement.GetProperty("estado").GetString());
     }
@@ -230,7 +231,7 @@ public class ChangeCalculationTests : IClassFixture<PaymentsApiFactory>, IAsyncL
         using var malformed = await client.PostAsync(
             "/api/v1/payments/charge", new StringContent("{", System.Text.Encoding.UTF8, "application/json"));
         using var invalid = await client.PostAsJsonAsync(
-            "/api/v1/payments/cash-shifts/open", new { fondo_inicial = -1m });
+            "/api/v1/payments/cash-shifts/open", new { opening_float = -1m });
 
         Assert.Equal(HttpStatusCode.BadRequest, malformed.StatusCode);
         var malformedError = await malformed.Content.ReadFromJsonAsync<ErrorResponse>();
@@ -240,7 +241,7 @@ public class ChangeCalculationTests : IClassFixture<PaymentsApiFactory>, IAsyncL
         Assert.Equal(HttpStatusCode.BadRequest, invalid.StatusCode);
         var invalidError = await invalid.Content.ReadFromJsonAsync<ErrorResponse>();
         Assert.Equal(ErrorResponse.ValidationErrorCode, invalidError!.Code);
-        Assert.Contains("'fondo_inicial'", invalidError.Message);
+        Assert.Contains("'opening_float'", invalidError.Message);
         Assert.Contains("mayor o igual", invalidError.Message);
     }
 
@@ -366,7 +367,7 @@ public class ChangeCalculationTests : IClassFixture<PaymentsApiFactory>, IAsyncL
     }
 
     private static ChargeRequest Request(Guid session, params PaymentRequest[] payments) =>
-        new(session, 0m, payments, [new ItemSnapshot("Hamburguesa Sencilla", 1, 80m, 80m)]);
+        new(session, 0m, payments);
 
     private static PaymentRequest Cash(decimal amount) => new(PaymentMethod.Cash, amount, null);
 
