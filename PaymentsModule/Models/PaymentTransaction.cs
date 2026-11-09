@@ -11,6 +11,7 @@ public class PaymentTransaction
     public Guid DinningSessionId { get; set; }
     public Guid CashShiftId { get; set; }
     public required string CashierId { get; set; }
+    public string TableName { get; set; } = string.Empty;
     public decimal Subtotal { get; set; }
     public decimal Taxes { get; set; }
     public decimal Tip { get; set; }

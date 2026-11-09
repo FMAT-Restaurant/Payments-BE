@@ -10,7 +10,7 @@ namespace PaymentsModule.Controllers;
 [Route("api/v1/payments")]
 public class PrintTicketController(PrintTicketService tickets) : ControllerBase
 {
-    /// <summary>Returns the print DTO of a sale for the original print or any reprint.</summary>
+    /// <summary>Returns the print DTO of a sale ready for in-browser printing for the original print or any reprint.</summary>
     [HttpGet("{folio}/ticket")]
     [ProducesResponseType<PrintTicketResponse>(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
@@ -18,6 +18,11 @@ public class PrintTicketController(PrintTicketService tickets) : ControllerBase
     [ProducesResponseType<ErrorResponse>(StatusCodes.Status500InternalServerError)]
     public async Task<IActionResult> GetPrintTicket(string folio, CancellationToken ct)
     {
+        if (string.IsNullOrWhiteSpace(folio))
+        {
+            return NotFound(ErrorResponse.TransactionNotFound(folio ?? string.Empty));
+        }
+
         // Database failures are not caught here: the global exception handler answers 500 without internals.
         var ticket = await tickets.GetAsync(folio, ct);
         if (ticket is null)

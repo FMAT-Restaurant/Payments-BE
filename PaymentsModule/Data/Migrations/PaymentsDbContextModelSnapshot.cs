@@ -333,6 +333,11 @@ namespace PaymentsModule.Data.Migrations
                         .HasPrecision(18, 2)
                         .HasColumnType("decimal(18,2)");
 
+                    b.Property<string>("TableName")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
                     b.Property<decimal>("Taxes")
                         .HasPrecision(18, 2)
                         .HasColumnType("decimal(18,2)");

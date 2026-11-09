@@ -39,6 +39,7 @@ public class PaymentsDbContext(DbContextOptions<PaymentsDbContext> options) : Db
         {
             e.Property(t => t.Folio).HasMaxLength(32);
             e.Property(t => t.CashierId).HasMaxLength(128);
+            e.Property(t => t.TableName).HasMaxLength(100);
             e.HasIndex(t => t.Folio).IsUnique();
             e.HasIndex(t => t.Number).IsUnique();
             // Idempotency guard: a session can be charged once, even under concurrent retries.

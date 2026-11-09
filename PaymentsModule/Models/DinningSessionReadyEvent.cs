@@ -13,7 +13,8 @@ public record DinningSessionReadyEvent(
     [property: JsonPropertyName("meseroId")] Guid WaiterId,
     DateTimeOffset Timestamp,
     IReadOnlyList<BillItem> Items,
-    [property: JsonPropertyName("totales")] BillTotals Totals);
+    [property: JsonPropertyName("totales")] BillTotals Totals,
+    [property: JsonPropertyName("nombreMesa")] string? TableName = null);
 
 public record BillItem(
     [property: JsonPropertyName("platilloId")] Guid DishId,

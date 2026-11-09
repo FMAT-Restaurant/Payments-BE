@@ -68,6 +68,7 @@ public class ChargeService(PaymentsDbContext db, PendingBillService bills, IPubl
             DinningSessionId = request.DinningSessionId,
             CashShiftId = shift.Id,
             CashierId = cashierId,
+            TableName = !string.IsNullOrWhiteSpace(bill.TableName) ? bill.TableName : "Mesa 01",
             Subtotal = bill.Totals.Subtotal,
             Taxes = bill.Totals.Taxes,
             Tip = request.Tip,
