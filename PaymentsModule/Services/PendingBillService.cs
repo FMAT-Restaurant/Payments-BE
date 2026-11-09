@@ -19,6 +19,12 @@ public class PendingBillService(IDistributedCache cache)
     /// </summary>
     public async Task<bool> SaveSnapshotAsync(DinningSessionReadyEvent message, CancellationToken ct = default)
     {
+        // Out-of-order guard: if the session was already cancelled, discard the late creation event (PMC-28).
+        if (await cache.GetAsync(CancelledKey(message.DinningSessionId), ct) is not null)
+        {
+            return false;
+        }
+
         // Check-then-set, two concurrent deliveries of the same eventId can both write (same data, harmless).
         var eventKey = $"payments:event:{message.EventId}";
         if (await cache.GetAsync(eventKey, ct) is not null)
@@ -110,6 +116,22 @@ public class PendingBillService(IDistributedCache cache)
         return list.OrderByDescending(b => b.Timestamp).ToList();
     }
 
+    /// <summary>
+    /// Cancels a session when DinningSessionCancelledEvent is received (PMC-28).
+    /// Stores a tombstone key to prevent late creation events, deletes the snapshot and purges the active index.
+    /// Returns true if the session snapshot existed and was cleaned up, or false if it was not found.
+    /// </summary>
+    public async Task<bool> CancelSessionAsync(Guid dinningSessionId, CancellationToken ct = default)
+    {
+        // Store tombstone in Redis with 24h TTL
+        await cache.SetStringAsync(CancelledKey(dinningSessionId), "1", Ttl, ct);
+
+        var existing = await GetAsync(dinningSessionId, ct);
+        await RemoveAsync(dinningSessionId, ct);
+
+        return existing is not null;
+    }
+
     /// <summary>Removes the session from the cache and from the active index when paid or cancelled (PMC-28 / AC4).</summary>
     public async Task RemoveAsync(Guid dinningSessionId, CancellationToken ct = default)
     {
@@ -162,4 +184,5 @@ public class PendingBillService(IDistributedCache cache)
     }
 
     private static string BillKey(Guid dinningSessionId) => $"payments:bill:{dinningSessionId}";
+    private static string CancelledKey(Guid dinningSessionId) => $"payments:cancelled:{dinningSessionId}";
 }

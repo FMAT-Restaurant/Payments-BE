@@ -38,6 +38,7 @@ builder.Services.AddAuthorization();
 builder.Services.AddStackExchangeRedisCache(options =>
     options.Configuration = builder.Configuration.GetConnectionString("Redis"));
 builder.Services.AddScoped<IValidator<DinningSessionReadyEvent>, DinningSessionReadyEventValidator>();
+builder.Services.AddScoped<IValidator<DinningSessionCancelledEvent>, DinningSessionCancelledEventValidator>();
 builder.Services.AddScoped<PendingBillService>();
 builder.Services.AddScoped<IValidator<ChargeRequest>, ChargeRequestValidator>();
 builder.Services.AddScoped<ChargeService>();
@@ -59,6 +60,7 @@ builder.Services.AddDbContext<PaymentsDbContext>(options =>
 builder.Services.AddMassTransit(x =>
 {
     x.AddConsumer<DinningSessionReadyConsumer, DinningSessionReadyConsumerDefinition>();
+    x.AddConsumer<DinningSessionCancelledConsumer, DinningSessionCancelledConsumerDefinition>();
     // Bus outbox: events published from services are stored with the DbContext and only sent after COMMIT.
     x.AddEntityFrameworkOutbox<PaymentsDbContext>(o =>
     {

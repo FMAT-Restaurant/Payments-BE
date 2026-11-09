@@ -279,6 +279,8 @@ public class CashShiftService(PaymentsDbContext db)
 
     private async Task<(decimal CashSales, decimal CardTotal, decimal TipsTotal, int CardTransactionCount)> CalculateShiftTotalsAsync(Guid shiftId, CancellationToken ct)
     {
+        await db.Database.ExecuteSqlRawAsync("SET TRANSACTION ISOLATION LEVEL READ COMMITTED;", ct);
+
         var totals = await db.Transactions.AsNoTracking()
             .Where(t => t.CashShiftId == shiftId && t.Status == TransactionStatus.Completed)
             .Select(t => new

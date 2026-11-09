@@ -367,6 +367,20 @@ Decisions for high-performance short-polling synchronization of the cashier inbo
 
 ---
 
+## Ghost Account Cleanup by Floor Cancellation Decisions (PMC-28 / HU-FE-02)
+
+Decisions for automatic cleanup of cancelled dining sessions in Redis to prevent ghost accounts in the cashier inbox:
+
+- **Message contract (AC1):** `DinningSessionCancelledEvent` consumed via MassTransit with fixed URN `[MessageUrn("DinningSessionCancelledEvent")]`. Emitted by Órdenes/Piso with fields `event_id`, `dinning_session_id`, `timestamp`, and optional `reason`. `DinningSessionCancelledEventValidator` validates non-empty GUIDs.
+- **Cache cleanup (AC2):** upon receipt, `DinningSessionCancelledConsumer` / `PendingBillService.CancelSessionAsync` deletes the pending bill snapshot (`payments:bill:{dinningSessionId}`) and purges the ID from the active polling secondary index (`payments:pending-bills:index`).
+- **No WebSockets / Polling reflection (AC3):** no push notifications (WebSocket/SSE) are emitted. The removal in Redis causes the session to naturally disappear from subsequent cashier polling (`GET /api/v1/payments/pendings`), preventing any charge attempt on cancelled tables.
+- **Idempotency & duplicates (AC4):** if a cancellation event arrives for a non-existent, already cancelled, or already charged session, the consumer logs an informational message (`"Sesión {SessionId} no encontrada para limpieza, se ignora"`), silently acknowledges (ACK) the message, and exits cleanly without error or exception.
+- **Out-of-order handling:** sets a tombstone key (`payments:cancelled:{dinningSessionId}`) with 24 h TTL in Redis. If a late creation event (`DinningSessionReadyEvent`) arrives after cancellation, `PendingBillService.SaveSnapshotAsync` detects the tombstone and discards the creation snapshot.
+- **Resilience & DLQ (AC5):** Redis connection or timeout failures throw exceptions, activating MassTransit automatic retries (3 retries with 5 s intervals) and routing unrecoverable failures to `<endpoint>_error` (DLQ) without losing messages. Schema/validation failures bypass retries and route directly to the error queue.
+- **Tests:** tests in `DinningSessionCancelledConsumerTests` using `MassTransitTestHarness` covering successful removal from cache and index, idempotent non-existent/duplicate handling, Redis failure triggering retry/DLQ, out-of-order cancellation before creation, and GUID validation.
+
+---
+
 ## General Rules
 
 - **Code Formatting:** All code contributions must adhere to repository standards and pass `dotnet format --verify-no-changes`.
