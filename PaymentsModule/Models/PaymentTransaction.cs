@@ -11,7 +11,9 @@ public class PaymentTransaction
     public Guid DinningSessionId { get; set; }
     public Guid CashShiftId { get; set; }
     public required string CashierId { get; set; }
-    public string TableName { get; set; } = string.Empty;
+    /// <summary>Table name from the PMC-5 snapshot; null while Órdenes does not publish it.</summary>
+    public string? TableName { get; set; }
+
     public decimal Subtotal { get; set; }
     public decimal Taxes { get; set; }
     public decimal Tip { get; set; }
@@ -26,6 +28,13 @@ public class PaymentTransaction
     public DateTimeOffset CreatedAt { get; set; }
     public List<TransactionItem> Items { get; set; } = [];
     public List<PaymentBreakdown> Payments { get; set; } = [];
+}
+
+/// <summary>Last folio number issued per UTC day, so the folio restarts at 000001 every day (PMC-6 AC3).</summary>
+public class FolioCounter
+{
+    public DateOnly Day { get; set; }
+    public int LastNumber { get; set; }
 }
 
 public class TransactionItem

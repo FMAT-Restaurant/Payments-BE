@@ -6,7 +6,7 @@ using PaymentsModule.Models;
 
 namespace PaymentsModule.Tests;
 
-// Supervision shift summary by id through the real HTTP pipeline (PMC-31 / PMC-16):
+// Supervision shift summary by id through the real HTTP pipeline (PMC-32 / PMC-16):
 // authorization roles, input validation, 404/403/400 error bodies, and MVC JSON serialization.
 public class CashShiftSummaryByIdHttpTests(PaymentsApiFactory api) : IClassFixture<PaymentsApiFactory>, IAsyncLifetime
 {
@@ -26,11 +26,10 @@ public class CashShiftSummaryByIdHttpTests(PaymentsApiFactory api) : IClassFixtu
         var body = await response.Content.ReadFromJsonAsync<CashShiftSummaryResponse>();
         Assert.NotNull(body);
         Assert.Equal(shiftId, body.CashShiftId);
-        Assert.Equal(CashShiftStatus.Open, body.ShiftStatus);
-        Assert.Equal(500.00m, body.InitialFund);
-        Assert.Equal(200.00m, body.Income.CashCollectedTotal);
-        Assert.Equal(350.00m, body.Income.CardsTotal);
-        Assert.Equal(700.00m, body.ExpectedCashInDrawer);
+        Assert.Equal(CashShiftStatus.Open, body.Status);
+        Assert.Equal(500.00m, body.OpeningFloat);
+        Assert.Equal(350.00m, body.CardTotal);
+        Assert.Equal(700.00m, body.ExpectedCash);
     }
 
     [Fact]
@@ -45,25 +44,21 @@ public class CashShiftSummaryByIdHttpTests(PaymentsApiFactory api) : IClassFixtu
         var body = await response.Content.ReadFromJsonAsync<CashShiftSummaryResponse>();
         Assert.NotNull(body);
         Assert.Equal(shiftId, body.CashShiftId);
-        Assert.Equal(CashShiftStatus.Open, body.ShiftStatus);
-        Assert.Equal(400.00m, body.InitialFund);
-        Assert.Equal(150.00m, body.Income.CashCollectedTotal);
-        Assert.Equal(100.00m, body.Income.CardsTotal);
-        Assert.Equal(550.00m, body.ExpectedCashInDrawer);
+        Assert.Equal(CashShiftStatus.Open, body.Status);
+        Assert.Equal(400.00m, body.OpeningFloat);
+        Assert.Equal(100.00m, body.CardTotal);
+        Assert.Equal(550.00m, body.ExpectedCash);
     }
 
     [Fact]
-    public async Task Admin_role_variant_queries_open_shift_returns_200()
+    public async Task Unknown_role_queries_open_shift_returns_403()
     {
         var (shiftId, _) = await SeedShiftWithSalesAsync(CashShiftStatus.Open, initialFund: 300m, cashAmount: 50m, cardAmount: 0m);
-        using var client = api.CreateAuthenticatedClient("admin-variant", "Admin");
+        using var client = api.CreateAuthenticatedClient("admin-variant", "OtherRole");
 
         var response = await client.GetAsync($"/api/v1/payments/cash-shifts/{shiftId}/summary");
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var body = await response.Content.ReadFromJsonAsync<CashShiftSummaryResponse>();
-        Assert.NotNull(body);
-        Assert.Equal(shiftId, body.CashShiftId);
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
 
     [Fact]
@@ -133,11 +128,10 @@ public class CashShiftSummaryByIdHttpTests(PaymentsApiFactory api) : IClassFixtu
         var body = await response.Content.ReadFromJsonAsync<CashShiftSummaryResponse>();
         Assert.NotNull(body);
         Assert.Equal(shiftId, body.CashShiftId);
-        Assert.Equal(CashShiftStatus.Closed, body.ShiftStatus);
-        Assert.Equal(500.00m, body.InitialFund);
-        Assert.Equal(200.00m, body.Income.CashCollectedTotal);
-        Assert.Equal(100.00m, body.Income.CardsTotal);
-        Assert.Equal(700.00m, body.ExpectedCashInDrawer);
+        Assert.Equal(CashShiftStatus.Closed, body.Status);
+        Assert.Equal(500.00m, body.OpeningFloat);
+        Assert.Equal(100.00m, body.CardTotal);
+        Assert.Equal(700.00m, body.ExpectedCash);
     }
 
     [Fact]
@@ -152,11 +146,10 @@ public class CashShiftSummaryByIdHttpTests(PaymentsApiFactory api) : IClassFixtu
         var body = await response.Content.ReadFromJsonAsync<CashShiftSummaryResponse>();
         Assert.NotNull(body);
         Assert.Equal(shiftId, body.CashShiftId);
-        Assert.Equal(CashShiftStatus.Unbalanced, body.ShiftStatus);
-        Assert.Equal(500.00m, body.InitialFund);
-        Assert.Equal(200.00m, body.Income.CashCollectedTotal);
-        Assert.Equal(50.00m, body.Income.CardsTotal);
-        Assert.Equal(700.00m, body.ExpectedCashInDrawer);
+        Assert.Equal(CashShiftStatus.Unbalanced, body.Status);
+        Assert.Equal(500.00m, body.OpeningFloat);
+        Assert.Equal(50.00m, body.CardTotal);
+        Assert.Equal(700.00m, body.ExpectedCash);
     }
 
     [Fact]
@@ -177,11 +170,10 @@ public class CashShiftSummaryByIdHttpTests(PaymentsApiFactory api) : IClassFixtu
         Assert.NotNull(cashierSummary);
         Assert.NotNull(adminSummary);
         Assert.Equal(cashierSummary.CashShiftId, adminSummary.CashShiftId);
-        Assert.Equal(cashierSummary.ShiftStatus, adminSummary.ShiftStatus);
-        Assert.Equal(cashierSummary.InitialFund, adminSummary.InitialFund);
-        Assert.Equal(cashierSummary.Income.CashCollectedTotal, adminSummary.Income.CashCollectedTotal);
-        Assert.Equal(cashierSummary.Income.CardsTotal, adminSummary.Income.CardsTotal);
-        Assert.Equal(cashierSummary.ExpectedCashInDrawer, adminSummary.ExpectedCashInDrawer);
+        Assert.Equal(cashierSummary.Status, adminSummary.Status);
+        Assert.Equal(cashierSummary.OpeningFloat, adminSummary.OpeningFloat);
+        Assert.Equal(cashierSummary.CardTotal, adminSummary.CardTotal);
+        Assert.Equal(cashierSummary.ExpectedCash, adminSummary.ExpectedCash);
     }
 
     private async Task<(Guid ShiftId, string CashierId)> SeedShiftWithSalesAsync(

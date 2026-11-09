@@ -147,6 +147,7 @@ public class PendingBillsHttpTests(PaymentsApiFactory api) : IClassFixture<Payme
             builder.ConfigureTestServices(services =>
             {
                 services.AddSingleton<IDistributedCache, FailingDistributedCache>();
+                services.AddSingleton<IPendingSessionIndex, FailingPendingSessionIndex>();
             });
         });
 
@@ -167,7 +168,6 @@ public class PendingBillsHttpTests(PaymentsApiFactory api) : IClassFixture<Payme
     [Theory]
     [InlineData("Gerente")]
     [InlineData("Administrador")]
-    [InlineData("Admin")]
     public async Task Allowed_supervision_roles_can_access_pendings(string role)
     {
         using var client = api.CreateAuthenticatedClient("supervisor-test", role);
@@ -175,6 +175,14 @@ public class PendingBillsHttpTests(PaymentsApiFactory api) : IClassFixture<Payme
         var response = await client.GetAsync("/api/v1/payments/pendings");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Admin_role_is_forbidden_for_pendings()
+    {
+        using var client = api.CreateAuthenticatedClient("admin-test", "Admin");
+        var response = await client.GetAsync("/api/v1/payments/pendings");
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
 
     // PMC-27 Scenario: Optimización de respuesta mediante el parámetro since
@@ -295,8 +303,19 @@ public class PendingBillsHttpTests(PaymentsApiFactory api) : IClassFixture<Payme
     private async Task ClearPendingIndexAsync()
     {
         await using var scope = api.Services.CreateAsyncScope();
-        var cache = scope.ServiceProvider.GetRequiredService<IDistributedCache>();
-        await cache.RemoveAsync(PendingBillService.IndexKey);
+        var index = scope.ServiceProvider.GetRequiredService<IPendingSessionIndex>();
+        var sessions = await index.GetPendingSessionsAsync();
+        foreach (var s in sessions)
+        {
+            await index.RemoveAsync(s);
+        }
+    }
+
+    private sealed class FailingPendingSessionIndex : IPendingSessionIndex
+    {
+        public Task AddAsync(Guid dinningSessionId, DateTimeOffset updatedAt) => throw new TimeoutException("Redis timeout simulated.");
+        public Task RemoveAsync(Guid dinningSessionId) => throw new TimeoutException("Redis timeout simulated.");
+        public Task<IReadOnlyList<Guid>> GetPendingSessionsAsync(DateTimeOffset? since = null) => throw new TimeoutException("Redis timeout simulated.");
     }
 
     private sealed class FailingDistributedCache : IDistributedCache

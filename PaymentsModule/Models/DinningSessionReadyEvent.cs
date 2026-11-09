@@ -14,22 +14,10 @@ public record DinningSessionReadyEvent(
     DateTimeOffset Timestamp,
     IReadOnlyList<BillItem> Items,
     [property: JsonPropertyName("totales")] BillTotals Totals,
-    [property: JsonPropertyName("nombreMesa")] string? TableName = null,
-    [property: JsonPropertyName("orderFolio")] string? OrderFolio = null,
-    [property: JsonPropertyName("nombreMesero")] string? WaiterName = null)
-{
-    [JsonPropertyName("order_folio")]
-    public string? OrderFolioSnake { init => OrderFolio ??= value; }
-
-    [JsonPropertyName("folioOrden")]
-    public string? OrderFolioSpanish { init => OrderFolio ??= value; }
-
-    [JsonPropertyName("table_name")]
-    public string? TableNameSnake { init => TableName ??= value; }
-
-    [JsonPropertyName("waiter_name")]
-    public string? WaiterNameSnake { init => WaiterName ??= value; }
-}
+    // PMC-5 (08/11/2026): display data for the cash desk; null until Órdenes publishes them.
+    string? TableName = null,
+    string? WaiterName = null,
+    string? OrderFolio = null);
 
 public record BillItem(
     [property: JsonPropertyName("platilloId")] Guid DishId,

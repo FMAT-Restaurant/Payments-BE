@@ -4,18 +4,16 @@ using PaymentsModule.Models;
 
 namespace PaymentsModule.Services;
 
-public class PendingBillService(IDistributedCache cache)
+public class PendingBillService(IDistributedCache cache, IPendingSessionIndex pendingSessions)
 {
     private static readonly DistributedCacheEntryOptions Ttl = new()
     {
         AbsoluteExpirationRelativeToNow = TimeSpan.FromHours(24)
     };
 
-    public const string IndexKey = "payments:pending-bills:index";
-
     /// <summary>
     /// Saves (or overwrites) the session snapshot. Returns false if the event was already processed or is older than the saved snapshot.
-    /// Updates the secondary index in Redis with the session timestamp to support high-performance polling and since filtering (PMC-27).
+    /// Updates the atomic sorted set index in Redis with the update timestamp to support high-performance polling and since filtering (PMC-27).
     /// </summary>
     public async Task<bool> SaveSnapshotAsync(DinningSessionReadyEvent message, CancellationToken ct = default)
     {
@@ -43,7 +41,8 @@ public class PendingBillService(IDistributedCache cache)
         await cache.SetStringAsync(BillKey(message.DinningSessionId), JsonSerializer.Serialize(message), Ttl, ct);
         await cache.SetStringAsync(eventKey, "1", Ttl, ct);
 
-        await AddToActiveIndexAsync(message.DinningSessionId, message.Timestamp, ct);
+        // Scored by the event timestamp (PMC-27 AC3): since filtering checks sessions created or updated on or after since.
+        await pendingSessions.AddAsync(message.DinningSessionId, message.Timestamp);
         return true;
     }
 
@@ -61,36 +60,21 @@ public class PendingBillService(IDistributedCache cache)
     }
 
     /// <summary>
-    /// Returns active pending bills reading the secondary index in Redis without KEYS * (AC2).
+    /// Returns active pending bills reading the Redis sorted set index without KEYS * (AC2).
     /// If <paramref name="since"/> is provided, only sessions created or updated on or after that timestamp are returned (PMC-27 AC3).
     /// </summary>
     public async Task<IReadOnlyList<PendingBillResponse>> GetAllPendingAsync(DateTimeOffset? since = null, CancellationToken ct = default)
     {
-        var indexJson = await cache.GetStringAsync(IndexKey, ct);
-        if (string.IsNullOrWhiteSpace(indexJson))
-        {
-            return [];
-        }
-
-        var dict = DeserializeIndex(indexJson);
-        if (dict.Count == 0)
-        {
-            return [];
-        }
-
-        var targetKeys = since.HasValue
-            ? dict.Where(kvp => kvp.Value >= since.Value).Select(kvp => kvp.Key).ToList()
-            : dict.Keys.ToList();
-
-        if (targetKeys.Count == 0)
+        var sessionIds = await pendingSessions.GetPendingSessionsAsync(since);
+        if (sessionIds.Count == 0)
         {
             return [];
         }
 
         var list = new List<PendingBillResponse>();
-        var expiredOrRemoved = new List<Guid>();
+        var expired = new List<Guid>();
 
-        foreach (var id in targetKeys)
+        foreach (var id in sessionIds)
         {
             var bill = await GetAsync(id, ct);
             if (bill is not null)
@@ -99,18 +83,16 @@ public class PendingBillService(IDistributedCache cache)
             }
             else
             {
-                expiredOrRemoved.Add(id);
+                expired.Add(id);
             }
         }
 
-        // Clean up expired or paid entries from the index if any were found
-        if (expiredOrRemoved.Count > 0)
+        if (expired.Count > 0)
         {
-            foreach (var id in expiredOrRemoved)
+            foreach (var id in expired)
             {
-                dict.Remove(id);
+                await pendingSessions.RemoveAsync(id);
             }
-            await cache.SetStringAsync(IndexKey, JsonSerializer.Serialize(dict), Ttl, ct);
         }
 
         return list.OrderByDescending(b => b.Timestamp).ToList();
@@ -136,51 +118,7 @@ public class PendingBillService(IDistributedCache cache)
     public async Task RemoveAsync(Guid dinningSessionId, CancellationToken ct = default)
     {
         await cache.RemoveAsync(BillKey(dinningSessionId), ct);
-
-        var indexJson = await cache.GetStringAsync(IndexKey, ct);
-        if (!string.IsNullOrWhiteSpace(indexJson))
-        {
-            var dict = DeserializeIndex(indexJson);
-            if (dict.Remove(dinningSessionId))
-            {
-                await cache.SetStringAsync(IndexKey, JsonSerializer.Serialize(dict), Ttl, ct);
-            }
-        }
-    }
-
-    private async Task AddToActiveIndexAsync(Guid sessionId, DateTimeOffset updatedAt, CancellationToken ct)
-    {
-        var indexJson = await cache.GetStringAsync(IndexKey, ct);
-        var dict = !string.IsNullOrWhiteSpace(indexJson)
-            ? DeserializeIndex(indexJson)
-            : [];
-
-        dict[sessionId] = updatedAt;
-        await cache.SetStringAsync(IndexKey, JsonSerializer.Serialize(dict), Ttl, ct);
-    }
-
-    private static Dictionary<Guid, DateTimeOffset> DeserializeIndex(string json)
-    {
-        try
-        {
-            return JsonSerializer.Deserialize<Dictionary<Guid, DateTimeOffset>>(json) ?? [];
-        }
-        catch
-        {
-            try
-            {
-                var set = JsonSerializer.Deserialize<HashSet<Guid>>(json);
-                if (set is not null)
-                {
-                    return set.ToDictionary(id => id, _ => DateTimeOffset.UtcNow);
-                }
-            }
-            catch
-            {
-            }
-
-            return [];
-        }
+        await pendingSessions.RemoveAsync(dinningSessionId);
     }
 
     private static string BillKey(Guid dinningSessionId) => $"payments:bill:{dinningSessionId}";

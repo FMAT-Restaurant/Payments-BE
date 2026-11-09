@@ -38,7 +38,6 @@ public class ActiveCashShiftHttpTests(PaymentsApiFactory api) : IClassFixture<Pa
     [Theory]
     [InlineData("Administrador")]
     [InlineData("Gerente")]
-    [InlineData("Admin")]
     public async Task Management_roles_with_open_shift_return_200(string role)
     {
         var userId = $"supervisor-{Guid.NewGuid()}";

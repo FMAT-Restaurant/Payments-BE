@@ -12,7 +12,7 @@ using PaymentsModule.Data;
 namespace PaymentsModule.Data.Migrations
 {
     [DbContext(typeof(PaymentsDbContext))]
-    [Migration("20261108170000_AddForceCloseAuditToCashShift")]
+    [Migration("20261108190000_AddForceCloseAuditToCashShift")]
     partial class AddForceCloseAuditToCashShift
     {
         /// <inheritdoc />

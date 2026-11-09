@@ -9,11 +9,12 @@ namespace PaymentsModule.Tests;
 public class PendingBillServiceTests
 {
     private readonly IDistributedCache _cache = new MemoryDistributedCache(Options.Create(new MemoryDistributedCacheOptions()));
+    private readonly InMemoryPendingSessionIndex _index = new();
     private readonly PendingBillService _service;
 
     public PendingBillServiceTests()
     {
-        _service = new PendingBillService(_cache);
+        _service = new PendingBillService(_cache, _index);
     }
 
     [Fact]

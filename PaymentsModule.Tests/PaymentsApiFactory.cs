@@ -15,6 +15,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using PaymentsModule.Data;
+using PaymentsModule.Services;
 
 namespace PaymentsModule.Tests;
 
@@ -114,6 +115,8 @@ public sealed class PaymentsApiFactory : WebApplicationFactory<Program>
 
             services.RemoveAll<IDistributedCache>();
             services.AddSingleton<IDistributedCache>(new MemoryDistributedCache(Options.Create(new MemoryDistributedCacheOptions())));
+            services.RemoveAll<IPendingSessionIndex>();
+            services.AddSingleton<IPendingSessionIndex, InMemoryPendingSessionIndex>();
 
             services.RemoveAll<IDbContextOptionsConfiguration<PaymentsDbContext>>();
             services.AddDbContext<PaymentsDbContext>(o => o.UseSqlServer(ConnectionString).AddInterceptors(Failures));

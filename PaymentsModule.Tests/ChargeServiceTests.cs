@@ -27,6 +27,7 @@ public class ChargeServiceTests : IAsyncLifetime
     private static bool _migrated;
 
     private readonly FailOnBreakdownInsert _failure = new();
+    private readonly InMemoryPendingSessionIndex _pending = new();
     private readonly ServiceProvider _provider;
 
     public ChargeServiceTests()
@@ -34,6 +35,7 @@ public class ChargeServiceTests : IAsyncLifetime
         _provider = new ServiceCollection()
             .AddLogging()
             .AddDistributedMemoryCache()
+            .AddSingleton<IPendingSessionIndex>(_pending)
             .AddDbContext<PaymentsDbContext>(o => o.UseSqlServer(ConnectionString).AddInterceptors(_failure))
             .AddScoped<PendingBillService>()
             .AddScoped<ChargeService>()
@@ -101,6 +103,10 @@ public class ChargeServiceTests : IAsyncLifetime
         Assert.Equal(TransactionStatus.Completed, saved.Status);
         Assert.Equal(250m, saved.Total);
         Assert.Equal(cashier, saved.CashierId);
+        Assert.Equal("Mesa 04", saved.TableName);
+        Assert.Equal(0m, saved.ChangeGiven);
+        // PMC-6: a charged session leaves the pending index.
+        Assert.False(_pending.Contains(session));
         var item = Assert.Single(saved.Items);
         Assert.Equal("Tacos al Pastor", item.DishName);
         var payment = Assert.Single(saved.Payments);
@@ -214,6 +220,68 @@ public class ChargeServiceTests : IAsyncLifetime
         Assert.Null(await FindAsync(session));
     }
 
+    // PMC-7 scenario 3: a card payment without its terminal reference is rejected before any write.
+    [Theory]
+    [InlineData(null)]
+    [InlineData("  ")]
+    public async Task Card_without_authorization_reference_is_rejected(string? reference)
+    {
+        var (session, cashier) = await ArrangeAsync(billTotal: 500m);
+
+        var result = await ChargeAsync(Request(session, new PaymentRequest(PaymentMethod.DebitCard, 500m, reference)), cashier);
+
+        Assert.Equal(ChargeOutcome.AuthorizationReferenceRequired, result.Outcome);
+        Assert.Equal("La referencia de autorización es obligatoria para pagos con tarjeta", result.Error);
+        Assert.Null(await FindAsync(session));
+    }
+
+    // PMC-6 AC3: the folio number restarts every day and never repeats under concurrency (scenario 4).
+    [Fact]
+    public async Task Daily_folio_number_is_unique_under_concurrency()
+    {
+        // A far-future day no charge uses; a counter left by a past run only shifts the start.
+        var day = new DateOnly(2100, 1, 1).AddDays(Random.Shared.Next(0, 300 * 365));
+        int before;
+        await using (var scope = _provider.CreateAsyncScope())
+        {
+            before = await scope.ServiceProvider.GetRequiredService<PaymentsDbContext>().FolioCounters
+                .Where(c => c.Day == day).Select(c => c.LastNumber).SingleOrDefaultAsync();
+        }
+
+        var numbers = await Task.WhenAll(Enumerable.Range(0, 20).Select(async _ =>
+        {
+            await using var scope = _provider.CreateAsyncScope();
+            var db = scope.ServiceProvider.GetRequiredService<PaymentsDbContext>();
+            await using var tx = await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted);
+            var number = await ChargeService.NextDailyNumberAsync(db, day);
+            await tx.CommitAsync();
+            return number;
+        }));
+
+        Assert.Equal(Enumerable.Range(before + 1, 20), numbers.Order());
+    }
+
+    [Fact]
+    public async Task Rolled_back_charge_gives_its_folio_number_back()
+    {
+        var day = new DateOnly(2100, 1, 1).AddDays(Random.Shared.Next(0, 300 * 365));
+        await using var scope = _provider.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<PaymentsDbContext>();
+
+        int first;
+        await using (var tx = await db.Database.BeginTransactionAsync())
+        {
+            first = await ChargeService.NextDailyNumberAsync(db, day);
+            await tx.RollbackAsync();
+        }
+
+        await using (var tx = await db.Database.BeginTransactionAsync())
+        {
+            Assert.Equal(first, await ChargeService.NextDailyNumberAsync(db, day));
+            await tx.CommitAsync();
+        }
+    }
+
     [Fact]
     public async Task Rejects_cashier_without_open_shift()
     {
@@ -276,25 +344,26 @@ public class ChargeServiceTests : IAsyncLifetime
     }
 
     [Fact]
-    public void Keeps_wire_contract_from_pmc6()
+    public void Keeps_wire_contract_from_pmc7_and_pmc13()
     {
         const string json = """
             {
-              "dinning_session_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
-              "propina": 15.00,
-              "pagos": [{ "metodo_pago": "EFECTIVO", "monto": 250.00, "referencia_autorizacion": null }],
-              "detalles_snapshot": [{ "nombre_platillo": "Tacos al Pastor", "cantidad": 2, "precio_unitario": 125.00, "importe": 250.00 }]
+              "dinning_session_id": "a1b2c3d4-e5f6-7890-1234-56789abcdef0",
+              "tip": 15.00,
+              "payments": [
+                { "method": "EFECTIVO", "amount": 200.00, "authorization_reference": null },
+                { "method": "TARJETA_CREDITO", "amount": 300.00, "authorization_reference": "AUTH-987654" }
+              ]
             }
             """;
 
         var request = JsonSerializer.Deserialize<ChargeRequest>(json)!;
-        var response = JsonSerializer.Serialize(new ChargeResponse("TX-20260929-000001", 250m, TransactionStatus.Completed, 0m, "ok"));
+        var response = JsonSerializer.Serialize(new ChargeResponse("TX-20261107-000005", 80m, TransactionStatus.Completed, 20m, "ok"));
 
-        Assert.Equal((PaymentMethod.Cash, 250m), (request.Payments[0].Method, request.Payments[0].Amount));
         Assert.Equal(15m, request.Tip);
-        Assert.Equal("Tacos al Pastor", request.ItemsSnapshot[0].DishName);
-        Assert.Contains("\"estado\":\"COMPLETADO\"", response);
-        Assert.Contains("\"cambio_entregado\":0", response);
+        Assert.Equal((PaymentMethod.Cash, 200m, (string?)null), (request.Payments[0].Method, request.Payments[0].Amount, request.Payments[0].AuthorizationReference));
+        Assert.Equal((PaymentMethod.CreditCard, "AUTH-987654"), (request.Payments[1].Method, request.Payments[1].AuthorizationReference));
+        Assert.Equal("""{"folio":"TX-20261107-000005","total":80,"estado":"COMPLETADO","change_given":20,"mensaje":"ok"}""", response);
     }
 
     private async Task<(Guid Session, string Cashier)> ArrangeAsync(decimal billTotal)
@@ -310,7 +379,8 @@ public class ChargeServiceTests : IAsyncLifetime
         await scope.ServiceProvider.GetRequiredService<PendingBillService>().SaveSnapshotAsync(new DinningSessionReadyEvent(
             Guid.NewGuid(), session, Guid.NewGuid(), Guid.NewGuid(), DateTimeOffset.UtcNow,
             [new BillItem(Guid.NewGuid(), "Tacos al Pastor", 2, billTotal / 2, billTotal)],
-            new BillTotals(billTotal, 0m, billTotal)));
+            new BillTotals(billTotal, 0m, billTotal),
+            TableName: "Mesa 04"));
         return (session, cashier);
     }
 
@@ -364,11 +434,7 @@ public class ChargeServiceTests : IAsyncLifetime
             .CountAsync(m => m.Body.Contains(session.ToString()));
     }
 
-    private static ChargeRequest Request(Guid session, PaymentRequest payment) =>
-        new(session, 0m, [payment], [new ItemSnapshot("Tacos al Pastor", 2, 125m, 250m)]);
-
-    private static ChargeRequest Request(Guid session, params PaymentRequest[] payments) =>
-        new(session, 0m, payments, [new ItemSnapshot("Tacos al Pastor", 2, 125m, 250m)]);
+    private static ChargeRequest Request(Guid session, params PaymentRequest[] payments) => new(session, 0m, payments);
 
     private static PaymentRequest Cash(decimal amount) => new(PaymentMethod.Cash, amount, null);
 

@@ -10,6 +10,7 @@ public class PaymentsDbContext(DbContextOptions<PaymentsDbContext> options) : Db
 
     public DbSet<CashShift> CashShifts => Set<CashShift>();
     public DbSet<PaymentTransaction> Transactions => Set<PaymentTransaction>();
+    public DbSet<FolioCounter> FolioCounters => Set<FolioCounter>();
 
     protected override void ConfigureConventions(ModelConfigurationBuilder builder)
     {
@@ -26,6 +27,8 @@ public class PaymentsDbContext(DbContextOptions<PaymentsDbContext> options) : Db
         modelBuilder.Entity<CashShift>(e =>
         {
             e.Property(s => s.CashierId).HasMaxLength(128);
+            e.Property(s => s.CashierName).HasMaxLength(200);
+            e.Property(s => s.CloseReason).HasMaxLength(500);
             e.Property(s => s.ClosedByAdminId).HasMaxLength(128);
             e.Property(s => s.ForceCloseReason).HasMaxLength(500);
             e.Property(s => s.RowVersion).IsRowVersion();
@@ -50,6 +53,8 @@ public class PaymentsDbContext(DbContextOptions<PaymentsDbContext> options) : Db
             e.HasMany(t => t.Items).WithOne().HasForeignKey(i => i.TransactionId);
             e.HasMany(t => t.Payments).WithOne().HasForeignKey(p => p.TransactionId);
         });
+
+        modelBuilder.Entity<FolioCounter>().HasKey(c => c.Day);
 
         modelBuilder.Entity<TransactionItem>().Property(i => i.DishName).HasMaxLength(200);
         modelBuilder.Entity<PaymentBreakdown>().Property(p => p.AuthorizationReference).HasMaxLength(100);

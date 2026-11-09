@@ -2,11 +2,12 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using PaymentsModule.Models;
 using PaymentsModule.Services;
+using StackExchange.Redis;
 
 namespace PaymentsModule.Controllers;
 
 [ApiController]
-[Authorize(Roles = "Administrador,Gerente,Admin,Cajero")]
+[Authorize(Roles = "Administrador,Gerente,Cajero")]
 [Route("api/v1/payments/pendings")]
 public class PendingBillsController(
     PendingBillService bills,
@@ -75,8 +76,9 @@ public class PendingBillsController(
     }
 
     private static bool IsRedisFailure(Exception ex) =>
-        ex is TimeoutException
-        || ex.GetType().Name.Contains("Redis", StringComparison.OrdinalIgnoreCase)
-        || (ex.Message != null && ex.Message.Contains("Redis", StringComparison.OrdinalIgnoreCase))
+        ex is RedisException
+        || ex is RedisTimeoutException
+        || ex is RedisConnectionException
+        || ex is TimeoutException
         || (ex.InnerException != null && IsRedisFailure(ex.InnerException));
 }

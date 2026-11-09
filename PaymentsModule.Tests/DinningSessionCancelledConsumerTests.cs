@@ -14,6 +14,7 @@ public class DinningSessionCancelledConsumerTests : IAsyncLifetime
     private readonly ServiceProvider _provider = new ServiceCollection()
         .AddLogging()
         .AddDistributedMemoryCache()
+        .AddSingleton<IPendingSessionIndex, InMemoryPendingSessionIndex>()
         .AddScoped<IValidator<DinningSessionCancelledEvent>, DinningSessionCancelledEventValidator>()
         .AddScoped<IValidator<DinningSessionReadyEvent>, DinningSessionReadyEventValidator>()
         .AddScoped<PendingBillService>()
@@ -82,6 +83,7 @@ public class DinningSessionCancelledConsumerTests : IAsyncLifetime
         var services = new ServiceCollection()
             .AddLogging()
             .AddSingleton<IDistributedCache, ThrowingCache>()
+            .AddSingleton<IPendingSessionIndex, InMemoryPendingSessionIndex>()
             .AddScoped<IValidator<DinningSessionCancelledEvent>, DinningSessionCancelledEventValidator>()
             .AddScoped<PendingBillService>()
             .AddMassTransitTestHarness(x =>
@@ -145,7 +147,7 @@ public class DinningSessionCancelledConsumerTests : IAsyncLifetime
 
     // Validation
     [Fact]
-    public async Task Event_with_empty_ids_is_faulted()
+    public async Task Event_with_empty_session_id_is_faulted()
     {
         var invalid = new DinningSessionCancelledEvent(Guid.Empty, Guid.Empty, DateTimeOffset.UtcNow);
 
@@ -154,11 +156,22 @@ public class DinningSessionCancelledConsumerTests : IAsyncLifetime
         Assert.NotNull(fault);
     }
 
+    [Fact]
+    public async Task Event_without_event_id_is_accepted_and_valid()
+    {
+        var session = Guid.NewGuid();
+        var cancelEvent = new DinningSessionCancelledEvent(Guid.Empty, session, DateTimeOffset.UtcNow);
+
+        var fault = await PublishAsync(cancelEvent);
+
+        Assert.Null(fault);
+    }
+
     private async Task<Exception?> PublishAsync(DinningSessionCancelledEvent message)
     {
         var consumed = Harness.GetConsumerHarness<DinningSessionCancelledConsumer>().Consumed;
         IReceivedMessage<DinningSessionCancelledEvent>[] Received() =>
-            consumed.Select<DinningSessionCancelledEvent>(m => m.Context.Message.EventId == message.EventId).ToArray();
+            consumed.Select<DinningSessionCancelledEvent>(m => m.Context.Message.DinningSessionId == message.DinningSessionId).ToArray();
 
         var before = Received().Length;
         await Harness.Bus.Publish(message);

@@ -67,13 +67,13 @@ public class OpenCashShiftsHttpTests(PaymentsApiFactory api) : IClassFixture<Pay
     }
 
     [Fact]
-    public async Task Admin_role_variant_queries_open_shifts_returns_200()
+    public async Task Admin_role_variant_queries_open_shifts_returns_403()
     {
         using var client = api.CreateAuthenticatedClient("admin-variant", "Admin");
 
         var response = await client.GetAsync("/api/v1/payments/cash-shifts/open");
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
 
     [Fact]

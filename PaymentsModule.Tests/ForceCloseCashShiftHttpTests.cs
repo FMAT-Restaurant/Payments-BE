@@ -214,7 +214,7 @@ public class ForceCloseCashShiftHttpTests(PaymentsApiFactory api) : IClassFixtur
         };
         db.CashShifts.Add(shift);
 
-        if (cashSales > 0m || tips > 0m)
+        if (cashSales > 0m)
         {
             var number = Random.Shared.Next(1000000, 9999999);
             var now = DateTimeOffset.UtcNow.AddMinutes(-40);
@@ -226,19 +226,20 @@ public class ForceCloseCashShiftHttpTests(PaymentsApiFactory api) : IClassFixtur
                 CashShiftId = shift.Id,
                 CashierId = cashierId,
                 Subtotal = cashSales,
-                Tip = tips,
-                Total = cashSales + tips,
+                Tip = 0m,
+                Total = cashSales,
                 Status = TransactionStatus.Completed,
                 CreatedAt = now,
-                Payments = [new PaymentBreakdown { Method = PaymentMethod.Cash, Amount = cashSales + tips }]
+                Payments = [new PaymentBreakdown { Method = PaymentMethod.Cash, Amount = cashSales }]
             };
             db.Transactions.Add(sale);
         }
 
-        if (cardSales > 0m)
+        if (cardSales > 0m || tips > 0m)
         {
             var number = Random.Shared.Next(1000000, 9999999);
             var now = DateTimeOffset.UtcNow.AddMinutes(-30);
+            var totalCard = cardSales + tips;
             var sale = new PaymentTransaction
             {
                 Number = number,
@@ -247,10 +248,11 @@ public class ForceCloseCashShiftHttpTests(PaymentsApiFactory api) : IClassFixtur
                 CashShiftId = shift.Id,
                 CashierId = cashierId,
                 Subtotal = cardSales,
-                Total = cardSales,
+                Tip = tips,
+                Total = totalCard,
                 Status = TransactionStatus.Completed,
                 CreatedAt = now,
-                Payments = [new PaymentBreakdown { Method = PaymentMethod.CreditCard, Amount = cardSales, AuthorizationReference = "AUTH-456" }]
+                Payments = [new PaymentBreakdown { Method = PaymentMethod.CreditCard, Amount = totalCard, AuthorizationReference = "AUTH-456" }]
             };
             db.Transactions.Add(sale);
         }

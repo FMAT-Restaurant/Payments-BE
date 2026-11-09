@@ -9,8 +9,6 @@ public class SalesHistoryService(PaymentsDbContext db)
     /// <summary>Paged sales history. Filters are applied only when present, and everything runs in the database (PMC-10).</summary>
     public async Task<PagedResponse<SalesHistoryItem>> GetAsync(SalesHistoryFilter filter, CancellationToken ct = default)
     {
-        await db.Database.ExecuteSqlRawAsync("SET TRANSACTION ISOLATION LEVEL READ COMMITTED;", ct);
-
         // Only completed transactions; no external service calls or joins (AC1).
         var query = db.Transactions
             .AsNoTracking()

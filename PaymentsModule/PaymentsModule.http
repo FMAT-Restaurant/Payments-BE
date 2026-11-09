@@ -1,33 +1,55 @@
 @PaymentsModule_HostAddress = http://localhost:5150
 @Token = <JWT from the identity provider>
 
-### Open cash shift (201 Created / 409 Conflict if already open)
-POST {{PaymentsModule_HostAddress}}/api/v1/cash-shifts/open
+### Open cash shift (201 Created / 409 CASH_SHIFT_ALREADY_OPEN)
+POST {{PaymentsModule_HostAddress}}/api/v1/payments/cash-shifts/open
 Authorization: Bearer {{Token}}
 Content-Type: application/json
 
 {
-  "fondo_inicial": 500.00
+  "opening_float": 500.00
 }
 
-### Get real-time cash shift summary / arqueo (200 OK / 404 Not Found if no open shift)
-GET {{PaymentsModule_HostAddress}}/api/v1/cash-shifts/summary
+### Real-time cash shift summary (200 OK / 404 CASH_SHIFT_NOT_OPEN)
+GET {{PaymentsModule_HostAddress}}/api/v1/payments/cash-shifts/summary
 Authorization: Bearer {{Token}}
 
-### Close cash shift (200 OK / 422 Unprocessable Entity if no open shift)
-POST {{PaymentsModule_HostAddress}}/api/v1/cash-shifts/close
+### Charge a dining session (201 Created / 4xx ErrorResponse)
+POST {{PaymentsModule_HostAddress}}/api/v1/payments/charge
 Authorization: Bearer {{Token}}
 Content-Type: application/json
 
 {
-  "efectivo_declarado": 2500.00
+  "dinning_session_id": "a1b2c3d4-e5f6-7890-1234-56789abcdef0",
+  "tip": 15.00,
+  "payments": [
+    { "method": "EFECTIVO", "amount": 200.00, "authorization_reference": null },
+    { "method": "TARJETA_CREDITO", "amount": 300.00, "authorization_reference": "AUTH-987654" }
+  ]
+}
+
+### Close cash shift (200 OK / 422 CASH_SHIFT_NOT_OPEN)
+POST {{PaymentsModule_HostAddress}}/api/v1/payments/cash-shifts/close
+Authorization: Bearer {{Token}}
+Content-Type: application/json
+
+{
+  "declared_cash": 2500.00,
+  "reason": null
 }
 
 ### Ticket detail by folio
-GET {{PaymentsModule_HostAddress}}/api/v1/pagos/TX-20260901-000001
+GET {{PaymentsModule_HostAddress}}/api/v1/payments/TX-20260901-000001
+Authorization: Bearer {{Token}}
+
+### Print ticket by folio
+GET {{PaymentsModule_HostAddress}}/api/v1/payments/TX-20260901-000001/ticket
 Authorization: Bearer {{Token}}
 
 ### Sales history (paged, filters are optional)
-GET {{PaymentsModule_HostAddress}}/api/v1/pagos?fecha_inicio=2026-09-01T00:00:00Z&fecha_fin=2026-09-30T23:59:59Z&estado=COMPLETADO&page_index=1&page_size=10
+GET {{PaymentsModule_HostAddress}}/api/v1/payments?fecha_inicio=2026-09-01T00:00:00Z&fecha_fin=2026-09-30T23:59:59Z&estado=COMPLETADO&page_index=1&page_size=10
 Authorization: Bearer {{Token}}
 
+### Sales export, Administrador only ([inicio, fin), at most 31 days)
+GET {{PaymentsModule_HostAddress}}/api/v1/payments/export?inicio=2026-09-01T00:00:00Z&fin=2026-10-01T00:00:00Z
+Authorization: Bearer {{Token}}

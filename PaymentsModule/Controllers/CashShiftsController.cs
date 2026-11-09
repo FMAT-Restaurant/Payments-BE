@@ -30,19 +30,19 @@ public class CashShiftsController(
             return Unauthorized();
         }
 
-        if (!User.IsInRole("Administrador") && !User.IsInRole("Gerente") && !User.IsInRole("Cajero") && !User.IsInRole("Admin"))
+        if (!User.IsInRole("Administrador") && !User.IsInRole("Gerente") && !User.IsInRole("Cajero"))
         {
             return StatusCode(StatusCodes.Status403Forbidden,
                 new ErrorResponse("FORBIDDEN_ROLE", "No tiene permisos para realizar esta acción."));
         }
 
-        var shift = await shifts.GetActiveShiftAsync(cashierId, ct);
-        if (shift is null)
+        var result = await shifts.GetActiveAsync(cashierId, ct);
+        if (result.Outcome == ActiveCashShiftOutcome.Found)
         {
-            return NotFound(new ErrorResponse("CASH_SHIFT_NOT_OPEN", "No hay un turno de caja abierto para este usuario"));
+            return Ok(result.Response);
         }
 
-        return Ok(shift);
+        return NotFound(new ErrorResponse("CASH_SHIFT_NOT_OPEN", result.Error!));
     }
 
     [HttpGet("summary")]
@@ -77,8 +77,8 @@ public class CashShiftsController(
         [FromRoute(Name = "cash_shift_id")] string cashShiftId,
         CancellationToken ct)
     {
-        // Only Administrador, Gerente, and Admin roles can supervise cash shifts.
-        if (!User.IsInRole("Administrador") && !User.IsInRole("Gerente") && !User.IsInRole("Admin"))
+        // Only Administrador and Gerente roles can supervise cash shifts.
+        if (!User.IsInRole("Administrador") && !User.IsInRole("Gerente"))
         {
             return StatusCode(StatusCodes.Status403Forbidden,
                 new ErrorResponse("FORBIDDEN_ROLE", "No tiene permisos para realizar esta acción."));
@@ -104,8 +104,8 @@ public class CashShiftsController(
     [ProducesResponseType<ErrorResponse>(StatusCodes.Status403Forbidden)]
     public async Task<IActionResult> GetOpenShifts(CancellationToken ct)
     {
-        // Only Administrador, Gerente, and Admin roles can access the supervisor open shifts list (PMC-30).
-        if (!User.IsInRole("Administrador") && !User.IsInRole("Gerente") && !User.IsInRole("Admin"))
+        // Only Administrador and Gerente roles can access the supervisor open shifts list (PMC-30).
+        if (!User.IsInRole("Administrador") && !User.IsInRole("Gerente"))
         {
             return StatusCode(StatusCodes.Status403Forbidden,
                 new ErrorResponse("FORBIDDEN_ROLE", "No tiene permisos para realizar esta acción."));
@@ -135,7 +135,11 @@ public class CashShiftsController(
             return Unauthorized();
         }
 
-        var result = await shifts.OpenAsync(request, cashierId, ct);
+        // PMC-8 AC3: display name from the JWT (OIDC "name", or ClaimTypes.Name when the handler maps "unique_name").
+        // Pending with Auth which claim carries it; null until then.
+        var cashierName = User.FindFirstValue("name") ?? User.FindFirstValue(ClaimTypes.Name);
+
+        var result = await shifts.OpenAsync(request, cashierId, cashierName, ct);
         if (result.Outcome == OpenShiftOutcome.Opened)
         {
             return StatusCode(StatusCodes.Status201Created, result.Response);
@@ -185,8 +189,8 @@ public class CashShiftsController(
         ForceCloseCashShiftRequest request,
         CancellationToken ct)
     {
-        // Only Administrador, Gerente, and Admin roles can force close shifts.
-        if (!User.IsInRole("Administrador") && !User.IsInRole("Gerente") && !User.IsInRole("Admin"))
+        // Only Administrador and Gerente roles can force close shifts.
+        if (!User.IsInRole("Administrador") && !User.IsInRole("Gerente"))
         {
             return StatusCode(StatusCodes.Status403Forbidden,
                 new ErrorResponse("FORBIDDEN_ROLE", "No tiene permisos para realizar esta acción."));
@@ -214,8 +218,8 @@ public class CashShiftsController(
         return result.Outcome switch
         {
             ForceCloseShiftOutcome.Closed => Ok(result.Response),
-            ForceCloseShiftOutcome.NotFound => NotFound(ErrorResponse.CashShiftNotFound()),
-            ForceCloseShiftOutcome.AlreadyClosed => Conflict(ErrorResponse.CashShiftClosed()),
+            ForceCloseShiftOutcome.ShiftNotFound => NotFound(ErrorResponse.CashShiftNotFound()),
+            ForceCloseShiftOutcome.ShiftAlreadyClosed => Conflict(ErrorResponse.CashShiftClosed()),
             _ => StatusCode(StatusCodes.Status500InternalServerError, new ErrorResponse("INTERNAL_ERROR", "Ocurrió un error interno."))
         };
     }

@@ -12,6 +12,7 @@ using PaymentsModule.Consumers;
 using PaymentsModule.Data;
 using PaymentsModule.Models;
 using PaymentsModule.Services;
+using StackExchange.Redis;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -39,6 +40,10 @@ builder.Services.AddStackExchangeRedisCache(options =>
     options.Configuration = builder.Configuration.GetConnectionString("Redis"));
 builder.Services.AddScoped<IValidator<DinningSessionReadyEvent>, DinningSessionReadyEventValidator>();
 builder.Services.AddScoped<IValidator<DinningSessionCancelledEvent>, DinningSessionCancelledEventValidator>();
+// Created on first use, so test hosts that replace the index never open a Redis connection.
+builder.Services.AddSingleton<IConnectionMultiplexer>(_ =>
+    ConnectionMultiplexer.Connect(builder.Configuration.GetConnectionString("Redis")!));
+builder.Services.AddSingleton<IPendingSessionIndex, RedisPendingSessionIndex>();
 builder.Services.AddScoped<PendingBillService>();
 builder.Services.AddScoped<IValidator<ChargeRequest>, ChargeRequestValidator>();
 builder.Services.AddScoped<ChargeService>();

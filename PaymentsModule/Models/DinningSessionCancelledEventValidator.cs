@@ -6,7 +6,6 @@ public class DinningSessionCancelledEventValidator : AbstractValidator<DinningSe
 {
     public DinningSessionCancelledEventValidator()
     {
-        RuleFor(x => x.EventId).NotEmpty();
         RuleFor(x => x.DinningSessionId).NotEmpty();
     }
 }
