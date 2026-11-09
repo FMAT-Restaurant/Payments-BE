@@ -28,6 +28,14 @@ public record ErrorResponse(
     public static ErrorResponse CashShiftClosed() =>
         new("CASH_SHIFT_CLOSED", "El turno de caja ya ha sido cerrado");
 
+    /// <summary>404 when a pending dining session is not found or already paid.</summary>
+    public static ErrorResponse SessionNotFound() =>
+        new("SESSION_NOT_FOUND", "La cuenta solicitada no existe o ya fue procesada.");
+
+    /// <summary>503 when Redis cache connection fails or times out.</summary>
+    public static ErrorResponse RedisTimeout() =>
+        new("REDIS_TIMEOUT", "El servicio de caché no se encuentra disponible temporalmente.");
+
     /// <summary>400 body: every validation message joined in one Spanish sentence list.</summary>
     public static ErrorResponse Validation(ValidationResult result) =>
         new(ValidationErrorCode, string.Join(" ", result.Errors.Select(e => e.ErrorMessage).Distinct()));

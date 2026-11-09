@@ -327,6 +327,33 @@ Agreed while implementing the forced closure of cash shifts by supervision:
 
 ---
 
+## Pending Bills for Cashier Inbox Decisions (HU-FE-02 / PMC-5)
+
+Decisions for cashier inbox pending accounts and payment screen reload:
+
+- **Routes and RBAC:**
+  - `GET /api/v1/payments/pendings`: returns all active pending accounts for the initial cashier inbox.
+  - `GET /api/v1/payments/pendings/{dinning_session_id}`: returns a single pending session for screen reload / rehydration (F5).
+  - Access: restricted to `[Authorize(Roles = "Administrador,Gerente,Admin,Cajero")]`. Requests without token return `401 Unauthorized`; unauthorized roles return `403 Forbidden`.
+- **Data source & secondary Redis index (No SQL, No `KEYS *`):**
+  - Endpoints do not query the SQL database; all data is read directly from Redis snapshots.
+  - Maintained via a secondary Set index key `payments:pending-bills:index` populated by `DinningSessionReadyConsumer` / `PendingBillService.SaveSnapshotAsync`, strictly avoiding blocking `KEYS *` scans.
+  - When a bill is successfully paid, `ChargeService.ChargeAsync` removes the snapshot and cleans up the session ID from the active index (`PendingBillService.RemoveAsync`).
+  - If no pending bills exist, `GET /api/v1/payments/pendings` returns `200 OK` with an empty array `[]`.
+- **Response contract (200 OK):**
+  - Strictly English wire property names in `snake_case`.
+  - Header: `dinning_session_id`, `order_folio`, `table_name`, `waiter_name`, `timestamp`, `subtotal`, `taxes`, and `total`.
+  - Items (`items`): array of `{ dish_id, name, quantity, unit_price, amount, notes }`.
+  - Table and waiter names (`table_name`, `waiter_name`) and order folio are resolved directly from the Redis snapshot without extra calls to other services.
+  - Financial precision: `decimal(18,2)` native precision.
+- **Error handling:**
+  - Non-existent or already paid session: `404 SESSION_NOT_FOUND` (`"La cuenta solicitada no existe o ya fue procesada."`).
+  - Redis cache failure / timeout: `503 REDIS_TIMEOUT` (`"El servicio de caché no se encuentra disponible temporalmente."`).
+  - Invalid GUID format on route parameter: `400 VALIDATION_ERROR` (`"El id de sesión tiene un formato inválido."`).
+- **Tests:** unit tests in `PendingBillServiceTests` and HTTP pipeline integration tests in `PendingBillsHttpTests` using `PaymentsApiFactory` (`payments_tests_http`), covering full list (200), empty list (200), single account rehydration (200), 404 for paid/missing account, 503 for Redis timeout, 400 for invalid GUID, and RBAC (401, 403, and 200 for Cajero/Gerente/Administrador).
+
+---
+
 ## General Rules
 
 - **Code Formatting:** All code contributions must adhere to repository standards and pass `dotnet format --verify-no-changes`.

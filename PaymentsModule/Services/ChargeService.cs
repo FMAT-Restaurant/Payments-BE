@@ -111,6 +111,15 @@ public class ChargeService(PaymentsDbContext db, PendingBillService bills, IPubl
 
         await dbTransaction.CommitAsync(ct);
 
+        try
+        {
+            await bills.RemoveAsync(request.DinningSessionId, ct);
+        }
+        catch
+        {
+            // Best-effort cleanup; a cache failure after COMMIT does not affect the successful charge.
+        }
+
         // Change is only returned in the response, never persisted (PMC-13-P7).
         return new(ChargeOutcome.Completed, new ChargeResponse(
             transaction.Folio, transaction.Total, transaction.Status, calculation.ChangeGiven, "Cobro procesado exitosamente"));
