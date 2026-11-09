@@ -176,6 +176,25 @@ Applies to every endpoint and supersedes the routes and `ProblemDetails` bodies 
 
 ---
 
+## Sales History Decisions (PMC-10 / PMC-24)
+
+Agreed with the PO (05/11/2026) for the Frontend sales history screen:
+
+- **Route:** `GET /api/v1/payments?start_date=&end_date=&page_index=&page_size=`, accessible to any authenticated user (`[Authorize]`). Requests without token return `401 Unauthorized`.
+- **Query parameters:** `start_date` and `end_date` are optional UTC dates; `page_index` (default 1, >= 1) and `page_size` (default 10, 1..50).
+- **Semi-open date interval `[start_date, end_date)`:** `end_date` is exclusive (the Frontend sends the beginning of the next day in UTC). Dates travel in UTC; the restaurant timezone determines how the FE builds day boundaries.
+- **No status or payment method filters:** all returned sales are completed (`Status == TransactionStatus.Completed`), as agreed with the PO.
+- **Response contract (200 OK):** returns `PagedResponse<SalesHistoryItem>` in strict snake_case:
+  - Metadata: `page_index`, `page_size`, `total_count`, `total_pages`.
+  - Items (`data`): array of `{ folio, cash_shift_id, total, status, paid_at, items, payment_breakdowns }`.
+  - Lines (`items`): array of `{ dish_name, quantity, unit_price }`.
+  - Breakdowns (`payment_breakdowns`): array of `{ method, amount }`.
+- **Single query projection (no N+1):** EF Core query with `.AsNoTracking()` directly projects to `SalesHistoryItem`, reading only the persisted snapshot without joins or calls to other microservices.
+- **Validation errors (400 Bad Request):** invalid pagination or `start_date >= end_date` returns `400 VALIDATION_ERROR` with message `"La fecha de inicio debe ser anterior a la fecha de fin."` without touching the database.
+- **Tests:** unit tests in `SalesHistoryQueryValidatorTests` and `SalesHistoryServiceTests` (`payments_tests_queries`), and HTTP pipeline integration tests in `SalesHistoryHttpTests` (`payments_tests_http`) using `PaymentsApiFactory` covering 200 with date range and pagination, 400 on invalid date range, 500 on timeout without internals, uncommitted transaction isolation (RCSI), and 401 unauthorized.
+
+---
+
 ## Transaction Detail by Folio Decisions (PMC-11 / PMC-25)
 
 Agreed with the PO (05/11/2026) for the Frontend transaction detail modal:

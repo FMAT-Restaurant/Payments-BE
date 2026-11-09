@@ -3,21 +3,23 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace PaymentsModule.Models;
 
-// Query string of the sales history. Spanish snake_case names are the wire contract of PMC-10.
+/// <summary>
+/// Query string parameters for paged sales history (PMC-10 / PMC-24).
+/// Contract agreed with PO (05/11/2026): English parameters, semi-open date window [start_date, end_date).
+/// </summary>
 public class SalesHistoryQuery
 {
+    [FromQuery(Name = "start_date")]
+    public DateTimeOffset? StartDate { get; set; }
+
     [FromQuery(Name = "fecha_inicio")]
-    public DateTimeOffset? From { get; set; }
+    public DateTimeOffset? FechaInicio { set => StartDate ??= value; }
+
+    [FromQuery(Name = "end_date")]
+    public DateTimeOffset? EndDate { get; set; }
 
     [FromQuery(Name = "fecha_fin")]
-    public DateTimeOffset? To { get; set; }
-
-    // Enum filters arrive as wire names (COMPLETADO, EFECTIVO, ...); the validator checks them and ToFilter() parses them.
-    [FromQuery(Name = "estado")]
-    public string? Status { get; set; }
-
-    [FromQuery(Name = "metodo_pago")]
-    public string? Method { get; set; }
+    public DateTimeOffset? FechaFin { set => EndDate ??= value; }
 
     [FromQuery(Name = "page_index")]
     public int PageIndex { get; set; } = 1;
@@ -27,19 +29,15 @@ public class SalesHistoryQuery
 
     /// <summary>Call only after <see cref="SalesHistoryQueryValidator"/> accepted the query.</summary>
     public SalesHistoryFilter ToFilter() => new(
-        From,
-        To,
-        WireEnum.TryParse<TransactionStatus>(Status, out var status) ? status : null,
-        WireEnum.TryParse<PaymentMethod>(Method, out var method) ? method : null,
+        StartDate,
+        EndDate,
         PageIndex,
         PageSize);
 }
 
 public record SalesHistoryFilter(
-    DateTimeOffset? From,
-    DateTimeOffset? To,
-    TransactionStatus? Status,
-    PaymentMethod? Method,
+    DateTimeOffset? StartDate,
+    DateTimeOffset? EndDate,
     int PageIndex,
     int PageSize);
 
@@ -52,12 +50,18 @@ public record PagedResponse<T>(
 
 public record SalesHistoryItem(
     [property: JsonPropertyName("folio")] string Folio,
+    [property: JsonPropertyName("cash_shift_id")] Guid CashShiftId,
     [property: JsonPropertyName("total")] decimal Total,
-    [property: JsonPropertyName("estado")] TransactionStatus Status,
-    [property: JsonPropertyName("fecha_cobro")] DateTimeOffset ChargedAt,
-    [property: JsonPropertyName("detalles")] List<SalesHistoryLine> Items);
+    [property: JsonPropertyName("status")] TransactionStatus Status,
+    [property: JsonPropertyName("paid_at")] DateTimeOffset PaidAt,
+    [property: JsonPropertyName("items")] IReadOnlyList<SalesHistoryLine> Items,
+    [property: JsonPropertyName("payment_breakdowns")] IReadOnlyList<SalesHistoryPaymentBreakdown> Payments);
 
 public record SalesHistoryLine(
-    [property: JsonPropertyName("nombre_platillo")] string DishName,
-    [property: JsonPropertyName("cantidad")] int Quantity,
-    [property: JsonPropertyName("precio_unitario")] decimal UnitPrice);
+    [property: JsonPropertyName("dish_name")] string DishName,
+    [property: JsonPropertyName("quantity")] int Quantity,
+    [property: JsonPropertyName("unit_price")] decimal UnitPrice);
+
+public record SalesHistoryPaymentBreakdown(
+    [property: JsonPropertyName("method")] PaymentMethod Method,
+    [property: JsonPropertyName("amount")] decimal Amount);
