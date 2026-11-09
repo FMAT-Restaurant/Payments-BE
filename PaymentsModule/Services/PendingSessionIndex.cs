@@ -12,6 +12,12 @@ public interface IPendingSessionIndex
 
     /// <summary>Removes the session once it is charged (PMC-6) or cancelled (PMC-28).</summary>
     Task RemoveAsync(Guid dinningSessionId);
+
+    /// <summary>
+    /// Returns the session IDs currently pending. If <paramref name="since"/> is provided, returns only
+    /// sessions updated on or after that timestamp (PMC-27 AC3).
+    /// </summary>
+    Task<IReadOnlyList<Guid>> GetPendingSessionsAsync(DateTimeOffset? since = null);
 }
 
 /// <summary>
@@ -31,4 +37,41 @@ public class RedisPendingSessionIndex(IConnectionMultiplexer redis) : IPendingSe
 
     public Task RemoveAsync(Guid dinningSessionId) =>
         redis.GetDatabase().SortedSetRemoveAsync(Key, dinningSessionId.ToString());
+
+    public async Task<IReadOnlyList<Guid>> GetPendingSessionsAsync(DateTimeOffset? since = null)
+    {
+        var db = redis.GetDatabase();
+        RedisValue[] members;
+        if (since.HasValue)
+        {
+            members = await db.SortedSetRangeByScoreAsync(
+                Key,
+                start: since.Value.ToUnixTimeMilliseconds(),
+                stop: double.PositiveInfinity,
+                order: Order.Descending);
+        }
+        else
+        {
+            members = await db.SortedSetRangeByRankAsync(
+                Key,
+                start: 0,
+                stop: -1,
+                order: Order.Descending);
+        }
+
+        if (members == null || members.Length == 0)
+        {
+            return [];
+        }
+
+        var result = new List<Guid>(members.Length);
+        foreach (var member in members)
+        {
+            if (Guid.TryParse((string?)member, out var id))
+            {
+                result.Add(id);
+            }
+        }
+        return result;
+    }
 }

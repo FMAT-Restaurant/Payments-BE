@@ -4,25 +4,30 @@ namespace PaymentsModule.Models;
 
 public class SalesExportQueryValidator : AbstractValidator<SalesExportQuery>
 {
-    /// <summary>Upper bound of the export window, to protect the database and the network (PMC-15 AC1).</summary>
+    /// <summary>Upper bound of the export window, to protect the database and the network (PMC-15 AC2).</summary>
     public static readonly TimeSpan MaxRange = TimeSpan.FromDays(31);
 
     public SalesExportQueryValidator()
     {
-        RuleFor(x => x.Start).NotNull().OverridePropertyName("inicio")
-            .WithMessage("El parámetro inicio es obligatorio.");
-        RuleFor(x => x.End).NotNull().OverridePropertyName("fin")
-            .WithMessage("El parámetro fin es obligatorio.");
+        RuleFor(x => x.StartDate)
+            .NotNull()
+            .OverridePropertyName("start_date")
+            .WithMessage("El parámetro start_date es obligatorio.");
 
-        When(x => x.Start.HasValue && x.End.HasValue, () =>
+        RuleFor(x => x.EndDate)
+            .NotNull()
+            .OverridePropertyName("end_date")
+            .WithMessage("El parámetro end_date es obligatorio.");
+
+        When(x => x.StartDate.HasValue && x.EndDate.HasValue, () =>
         {
-            RuleFor(x => x.End)
+            RuleFor(x => x.EndDate)
                 // fin is exclusive, so inicio == fin would always be an empty window.
-                .Must((query, end) => end > query.Start)
+                .Must((query, end) => end > query.StartDate)
                 .WithMessage("El rango de fechas no es válido: inicio debe ser anterior a fin.")
-                .Must((query, end) => end - query.Start <= MaxRange)
+                .Must((query, end) => end - query.StartDate <= MaxRange)
                 .WithMessage("El rango de fechas no puede exceder los 31 días.")
-                .OverridePropertyName("fin");
+                .OverridePropertyName("end_date");
         });
     }
 }

@@ -1,7 +1,9 @@
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using PaymentsModule.Controllers;
 using PaymentsModule.Data;
@@ -25,8 +27,16 @@ public class PrintTicketTests : IAsyncLifetime
 
     public PrintTicketTests()
     {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Restaurant:Name"] = "Restaurante FMAT"
+            })
+            .Build();
+
         _provider = new ServiceCollection()
             .AddLogging()
+            .AddSingleton<IConfiguration>(configuration)
             .AddDbContext<PaymentsDbContext>(o => o.UseSqlServer(ConnectionString).AddInterceptors(_failure))
             .AddScoped<PrintTicketService>()
             .BuildServiceProvider(true);
@@ -40,49 +50,57 @@ public class PrintTicketTests : IAsyncLifetime
 
     public async Task DisposeAsync() => await _provider.DisposeAsync();
 
-    // Scenario 1.
+    // Scenario 1: Existing folio returns flat browser-print DTO.
     [Fact]
-    public async Task Existing_folio_returns_header_body_and_footer_from_the_sale_history()
+    public async Task Existing_folio_returns_print_ticket_from_the_sale_history()
     {
-        var soldAt = new DateTimeOffset(2026, 9, 29, 18, 0, 0, TimeSpan.Zero);
+        var soldAt = new DateTimeOffset(2026, 11, 7, 18, 0, 0, TimeSpan.Zero);
         var sale = await InsertSaleAsync(soldAt, TransactionStatus.Completed);
 
         var result = await GetAsync(sale.Folio);
 
         var ok = Assert.IsType<OkObjectResult>(result);
         var ticket = Assert.IsType<PrintTicketResponse>(ok.Value);
-        Assert.Equal(new PrintTicketHeader(sale.Folio, soldAt, sale.CashShiftId, sale.DinningSessionId), ticket.Header);
+        Assert.Equal("Restaurante FMAT", ticket.RestaurantName);
+        Assert.Equal(sale.Folio, ticket.Folio);
+        Assert.Equal(soldAt, ticket.PaidAt);
+        Assert.Equal("Mesa 04", ticket.TableName);
+        Assert.Equal("Juan Pérez", ticket.CashierName);
         Assert.Equal(
             new[]
             {
                 new PrintTicketLine("Corte Ribeye", 1, 500.00m, 500.00m),
                 new PrintTicketLine("Agua de horchata", 2, 35.50m, 71.00m)
             },
-            ticket.Lines);
-        var footer = ticket.Footer;
-        Assert.Equal((571.00m, 91.36m, 60.00m, 722.36m), (footer.Subtotal, footer.Taxes, footer.Tip, footer.Total));
+            ticket.Items);
+        Assert.Equal((571.00m, 91.36m, 60.00m, 722.36m, 50.00m), (ticket.Subtotal, ticket.Taxes, ticket.Tip, ticket.Total, ticket.ChangeGiven));
         Assert.Equal(
-            new[] { new PrintTicketPayment(PaymentMethod.CreditCard, 400.00m), new PrintTicketPayment(PaymentMethod.Cash, 322.36m) },
-            footer.Payments);
-        Assert.Equal(TransactionStatus.Completed, footer.Status);
+            new[]
+            {
+                new PrintTicketPayment(PaymentMethod.CreditCard, 400.00m, "AUTH-987654"),
+                new PrintTicketPayment(PaymentMethod.Cash, 322.36m, null)
+            },
+            ticket.Payments);
     }
 
-    // Wire contract: Spanish snake_case names, enum labels and decimals with their two decimal places.
+    // Wire contract: JSON property names in snake_case, enum labels and decimals with two decimal places.
     [Fact]
     public async Task Ticket_serializes_to_the_agreed_json_contract()
     {
-        var sale = await InsertSaleAsync(new DateTimeOffset(2026, 9, 29, 18, 0, 0, TimeSpan.Zero), TransactionStatus.Cancelled);
+        var soldAt = new DateTimeOffset(2026, 11, 7, 18, 0, 0, TimeSpan.Zero);
+        var sale = await InsertSaleAsync(soldAt, TransactionStatus.Completed);
 
-        var json = JsonSerializer.Serialize(Assert.IsType<OkObjectResult>(await GetAsync(sale.Folio)).Value);
+        var serializerOptions = new JsonSerializerOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
+        var json = JsonSerializer.Serialize(Assert.IsType<OkObjectResult>(await GetAsync(sale.Folio)).Value, serializerOptions);
 
         Assert.Equal(
             $$$"""
-            {"cabecera":{"folio":"{{{sale.Folio}}}","fecha_impresion":"2026-09-29T18:00:00+00:00","turno_caja_id":"{{{sale.CashShiftId}}}","dinning_session_id":"{{{sale.DinningSessionId}}}"},"cuerpo":[{"nombre_platillo":"Corte Ribeye","cantidad":1,"precio_unitario":500.00,"importe":500.00},{"nombre_platillo":"Agua de horchata","cantidad":2,"precio_unitario":35.50,"importe":71.00}],"pie":{"subtotal":571.00,"impuestos":91.36,"propina":60.00,"total":722.36,"pagos":[{"metodo_pago":"TARJETA_CREDITO","monto":400.00},{"metodo_pago":"EFECTIVO","monto":322.36}],"estado":"CANCELADO"}}
+            {"restaurant_name":"Restaurante FMAT","folio":"{{{sale.Folio}}}","paid_at":"2026-11-07T18:00:00+00:00","table_name":"Mesa 04","cashier_name":"Juan Pérez","items":[{"dish_name":"Corte Ribeye","quantity":1,"unit_price":500.00,"amount":500.00},{"dish_name":"Agua de horchata","quantity":2,"unit_price":35.50,"amount":71.00}],"subtotal":571.00,"taxes":91.36,"tip":60.00,"total":722.36,"payments":[{"method":"TARJETA_CREDITO","amount":400.00,"authorization_reference":"AUTH-987654"},{"method":"EFECTIVO","amount":322.36,"authorization_reference":null}],"change_given":50.00}
             """,
             json);
     }
 
-    // Scenario 2.
+    // Scenario 2: Unknown folio returns 404 TRANSACTION_NOT_FOUND.
     [Fact]
     public async Task Unknown_folio_returns_not_found()
     {
@@ -92,6 +110,18 @@ public class PrintTicketTests : IAsyncLifetime
         var error = Assert.IsType<ErrorResponse>(notFound.Value);
         Assert.Equal("TRANSACTION_NOT_FOUND", error.Code);
         Assert.Equal("El ticket 'TX-00000000-000000' no existe", error.Message);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task Empty_or_whitespace_folio_returns_not_found(string folio)
+    {
+        var result = await GetAsync(folio);
+
+        var notFound = Assert.IsType<NotFoundObjectResult>(result);
+        var error = Assert.IsType<ErrorResponse>(notFound.Value);
+        Assert.Equal("TRANSACTION_NOT_FOUND", error.Code);
     }
 
     // Scenario 3, service side: the exception propagates out of the controller untouched. The 500 answered by
@@ -105,7 +135,7 @@ public class PrintTicketTests : IAsyncLifetime
         await Assert.ThrowsAsync<SimulatedDatabaseTimeout>(() => GetAsync(sale.Folio));
     }
 
-    // Scenario 4: five simultaneous reprints get exactly the same document.
+    // Scenario 4: five simultaneous reprints get exactly the same document without blocking.
     [Fact]
     public async Task Concurrent_reprints_return_identical_tickets()
     {
@@ -120,10 +150,9 @@ public class PrintTicketTests : IAsyncLifetime
         Assert.Contains(sale.Folio, documents[0]);
     }
 
-    // Order guarantee: lines and payments come back in the order they were charged (EF Core sequential GUIDs),
-    // with enough rows that an accidental order would not pass by chance.
+    // Order guarantee: items and payments come back in insertion order (EF Core sequential GUIDs).
     [Fact]
-    public async Task Lines_and_payments_keep_the_order_they_were_charged_in()
+    public async Task Items_and_payments_keep_the_order_they_were_charged_in()
     {
         var dishes = Enumerable.Range(1, 12).Select(n => $"Platillo {n:D2}").ToArray();
         var methods = new[] { PaymentMethod.DebitCard, PaymentMethod.CreditCard, PaymentMethod.Cash };
@@ -131,27 +160,27 @@ public class PrintTicketTests : IAsyncLifetime
             DateTimeOffset.UtcNow,
             TransactionStatus.Completed,
             dishes.Select(d => new TransactionItem { DishName = d, Quantity = 1, UnitPrice = 10.00m, Amount = 10.00m }).ToList(),
-            methods.Select(m => new PaymentBreakdown { Method = m, Amount = 40.00m }).ToList());
+            methods.Select((m, i) => new PaymentBreakdown { Method = m, Amount = 40.00m, AuthorizationReference = $"AUTH-{i}" }).ToList());
 
         var ticket = Assert.IsType<PrintTicketResponse>(Assert.IsType<OkObjectResult>(await GetAsync(sale.Folio)).Value);
 
-        Assert.Equal(dishes, ticket.Lines.Select(l => l.DishName));
-        Assert.Equal(methods, ticket.Footer.Payments.Select(p => p.Method));
+        Assert.Equal(dishes, ticket.Items.Select(l => l.DishName));
+        Assert.Equal(methods, ticket.Payments.Select(p => p.Method));
     }
 
-    // fecha_impresion is the sale date, not the moment of the query: reprints made at different times are identical.
+    // paid_at is the sale date, not the moment of the query: reprints made at different times are identical.
     [Fact]
     public async Task Reprints_at_different_times_keep_the_sale_date()
     {
-        var soldAt = new DateTimeOffset(2026, 9, 29, 18, 0, 0, TimeSpan.Zero);
+        var soldAt = new DateTimeOffset(2026, 11, 7, 18, 0, 0, TimeSpan.Zero);
         var sale = await InsertSaleAsync(soldAt, TransactionStatus.Completed);
 
         var first = Assert.IsType<PrintTicketResponse>(Assert.IsType<OkObjectResult>(await GetAsync(sale.Folio)).Value);
         await Task.Delay(TimeSpan.FromSeconds(1.1));
         var second = Assert.IsType<PrintTicketResponse>(Assert.IsType<OkObjectResult>(await GetAsync(sale.Folio)).Value);
 
-        Assert.Equal(soldAt, first.Header.PrintedAt);
-        Assert.Equal(soldAt, second.Header.PrintedAt);
+        Assert.Equal(soldAt, first.PaidAt);
+        Assert.Equal(soldAt, second.PaidAt);
         Assert.Equal(JsonSerializer.Serialize(first), JsonSerializer.Serialize(second));
     }
 
@@ -185,7 +214,7 @@ public class PrintTicketTests : IAsyncLifetime
         List<TransactionItem>? items = null,
         List<PaymentBreakdown>? payments = null)
     {
-        var shift = new CashShift { CashierId = $"cashier-{Guid.NewGuid()}", InitialFund = 500m };
+        var shift = new CashShift { CashierId = "Juan Pérez", Status = CashShiftStatus.Closed, InitialFund = 500m };
         db.CashShifts.Add(shift);
         await db.SaveChangesAsync();
 
@@ -197,10 +226,12 @@ public class PrintTicketTests : IAsyncLifetime
             DinningSessionId = Guid.NewGuid(),
             CashShiftId = shift.Id,
             CashierId = shift.CashierId,
+            TableName = "Mesa 04",
             Subtotal = 571.00m,
             Taxes = 91.36m,
             Tip = 60.00m,
             Total = 722.36m,
+            ChangeGiven = 50.00m,
             Status = status,
             CreatedAt = soldAt,
             Items = items ?? new List<TransactionItem>
@@ -210,8 +241,8 @@ public class PrintTicketTests : IAsyncLifetime
             },
             Payments = payments ?? new List<PaymentBreakdown>
             {
-                new() { Method = PaymentMethod.CreditCard, Amount = 400.00m, AuthorizationReference = "AUTH-1" },
-                new() { Method = PaymentMethod.Cash, Amount = 322.36m }
+                new() { Method = PaymentMethod.CreditCard, Amount = 400.00m, AuthorizationReference = "AUTH-987654" },
+                new() { Method = PaymentMethod.Cash, Amount = 322.36m, AuthorizationReference = null }
             }
         };
         db.Transactions.Add(sale);

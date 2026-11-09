@@ -112,8 +112,14 @@ public class ChargeServiceTests : IAsyncLifetime
         var payment = Assert.Single(saved.Payments);
         Assert.Equal((PaymentMethod.Cash, 250m), (payment.Method, payment.Amount));
 
-        Assert.True(await Harness.Consumed.Any<PaymentCompletedEvent>(m =>
-            m.Context.Message.DinningSessionId == session && m.Context.Message.Folio == saved.Folio));
+        var consumed = false;
+        for (var i = 0; i < 50 && !consumed; i++)
+        {
+            consumed = await Harness.Consumed.Any<PaymentCompletedEvent>(m =>
+                m.Context.Message.DinningSessionId == session && m.Context.Message.Folio == saved.Folio);
+            if (!consumed) await Task.Delay(200);
+        }
+        Assert.True(consumed);
     }
 
     [Fact]

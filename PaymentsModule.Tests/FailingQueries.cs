@@ -20,6 +20,12 @@ public sealed class FailingQueries : DbCommandInterceptor
 
     public void FailQueriesWith(object parameterValue) => _values.TryAdd(parameterValue, 0);
 
+    public void StopFailing(object parameterValue)
+    {
+        _values.TryRemove(parameterValue, out _);
+        _failAfterRows.TryRemove(parameterValue, out _);
+    }
+
     /// <summary>The query starts normally and its reader throws once <paramref name="rows"/> rows were read.</summary>
     public void FailReadsAfter(object parameterValue, int rows) => _failAfterRows[parameterValue] = rows;
 

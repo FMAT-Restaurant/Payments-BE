@@ -28,6 +28,11 @@ public class TransactionDetailTests : IAsyncLifetime
         Assert.NotNull(detail);
         Assert.Equal((saved.CashShiftId, saved.DinningSessionId), (detail.CashShiftId, detail.DinningSessionId));
         Assert.Equal((500m, TransactionStatus.Completed), (detail.Total, detail.Status));
+        Assert.Equal(saved.CreatedAt, detail.PaidAt);
+        Assert.Equal(saved.Subtotal, detail.Subtotal);
+        Assert.Equal(saved.Taxes, detail.Taxes);
+        Assert.Equal(saved.Tip, detail.Tip);
+        Assert.Equal(0.00m, detail.ChangeGiven);
         var item = Assert.Single(detail.Items);
         Assert.Equal(("Ribeye", 1, 500m, 500m), (item.DishName, item.Quantity, item.UnitPrice, item.Amount));
         Assert.Equal(2, detail.Payments.Count);
@@ -53,7 +58,9 @@ public class TransactionDetailTests : IAsyncLifetime
         var found = Assert.IsType<OkObjectResult>(await controller.GetByFolio("TX-20260901-000001", CancellationToken.None));
 
         Assert.Equal(StatusCodes.Status404NotFound, missing.StatusCode);
-        Assert.Equal("TRANSACTION_NOT_FOUND", Assert.IsType<ErrorResponse>(missing.Value).Code);
+        var error = Assert.IsType<ErrorResponse>(missing.Value);
+        Assert.Equal("TRANSACTION_NOT_FOUND", error.Code);
+        Assert.Equal("El ticket 'TX-99999' no existe", error.Message);
         Assert.IsType<TransactionDetailResponse>(found.Value);
     }
 
@@ -67,13 +74,20 @@ public class TransactionDetailTests : IAsyncLifetime
         using var json = JsonDocument.Parse(JsonSerializer.Serialize(detail));
         var root = json.RootElement;
         Assert.Equal("TX-20260901-000001", root.GetProperty("folio").GetString());
-        Assert.Equal("COMPLETADO", root.GetProperty("estado").GetString());
+        Assert.Equal("COMPLETADO", root.GetProperty("status").GetString());
         Assert.Equal(750m, root.GetProperty("total").GetDecimal());
-        Assert.Equal(750m, root.GetProperty("detalles")[0].GetProperty("precio_unitario").GetDecimal());
-        var payment = root.GetProperty("desgloses")[0];
-        Assert.Equal("TARJETA_CREDITO", payment.GetProperty("metodo_pago").GetString());
-        Assert.Equal(750m, payment.GetProperty("monto").GetDecimal());
-        Assert.Equal("AUTH-123456", payment.GetProperty("referencia_autorizacion").GetString());
+        Assert.Equal(750m, root.GetProperty("subtotal").GetDecimal());
+        Assert.Equal(0m, root.GetProperty("taxes").GetDecimal());
+        Assert.Equal(0m, root.GetProperty("tip").GetDecimal());
+        Assert.Equal(0m, root.GetProperty("change_given").GetDecimal());
+        Assert.Equal("Ribeye", root.GetProperty("items")[0].GetProperty("dish_name").GetString());
+        Assert.Equal(1, root.GetProperty("items")[0].GetProperty("quantity").GetInt32());
+        Assert.Equal(750m, root.GetProperty("items")[0].GetProperty("unit_price").GetDecimal());
+        Assert.Equal(750m, root.GetProperty("items")[0].GetProperty("amount").GetDecimal());
+        var payment = root.GetProperty("payment_breakdowns")[0];
+        Assert.Equal("TARJETA_CREDITO", payment.GetProperty("method").GetString());
+        Assert.Equal(750m, payment.GetProperty("amount").GetDecimal());
+        Assert.Equal("AUTH-123456", payment.GetProperty("authorization_reference").GetString());
     }
 
     private static async Task<TransactionDetailResponse?> GetAsync(string folio)

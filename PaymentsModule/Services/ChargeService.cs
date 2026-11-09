@@ -42,6 +42,11 @@ public class ChargeService(
         var bill = await bills.GetAsync(request.DinningSessionId, ct);
         if (bill is null)
         {
+            if (await db.Transactions.AnyAsync(t => t.DinningSessionId == request.DinningSessionId, ct))
+            {
+                return AlreadyPaid();
+            }
+
             return new(ChargeOutcome.BillNotFound, Error: "No se encontró una cuenta pendiente para esta sesión.");
         }
 
@@ -123,6 +128,7 @@ public class ChargeService(
 
         try
         {
+            await bills.RemoveAsync(request.DinningSessionId, ct);
             await pendingSessions.RemoveAsync(request.DinningSessionId);
         }
         // The sale is committed: a Redis failure must not turn it into a 500. The idempotency check keeps a stale entry harmless.

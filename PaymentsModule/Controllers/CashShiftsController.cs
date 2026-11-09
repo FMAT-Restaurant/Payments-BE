@@ -13,8 +13,38 @@ namespace PaymentsModule.Controllers;
 public class CashShiftsController(
     CashShiftService shifts,
     IValidator<OpenCashShiftRequest> openValidator,
-    IValidator<CloseCashShiftRequest> closeValidator) : ControllerBase
+    IValidator<CloseCashShiftRequest> closeValidator,
+    IValidator<ForceCloseCashShiftRequest> forceCloseValidator) : ControllerBase
 {
+    [HttpGet("me")]
+    [ProducesResponseType<ActiveCashShiftResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType<ErrorResponse>(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType<ErrorResponse>(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetMyActiveShift(CancellationToken ct)
+    {
+        // Cashier identity comes only from the JWT claim (AC2).
+        var cashierId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (string.IsNullOrEmpty(cashierId))
+        {
+            return Unauthorized();
+        }
+
+        if (!User.IsInRole("Administrador") && !User.IsInRole("Gerente") && !User.IsInRole("Cajero"))
+        {
+            return StatusCode(StatusCodes.Status403Forbidden,
+                new ErrorResponse("FORBIDDEN_ROLE", "No tiene permisos para realizar esta acción."));
+        }
+
+        var result = await shifts.GetActiveAsync(cashierId, ct);
+        if (result.Outcome == ActiveCashShiftOutcome.Found)
+        {
+            return Ok(result.Response);
+        }
+
+        return NotFound(new ErrorResponse("CASH_SHIFT_NOT_OPEN", result.Error!));
+    }
+
     [HttpGet("summary")]
     [ProducesResponseType<CashShiftSummaryResponse>(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
@@ -35,6 +65,54 @@ public class CashShiftsController(
         }
 
         return NotFound(new ErrorResponse("CASH_SHIFT_NOT_OPEN", result.Error!));
+    }
+
+    [HttpGet("{cash_shift_id}/summary")]
+    [ProducesResponseType<CashShiftSummaryResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType<ErrorResponse>(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType<ErrorResponse>(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType<ErrorResponse>(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetSummaryById(
+        [FromRoute(Name = "cash_shift_id")] string cashShiftId,
+        CancellationToken ct)
+    {
+        // Only Administrador and Gerente roles can supervise cash shifts.
+        if (!User.IsInRole("Administrador") && !User.IsInRole("Gerente"))
+        {
+            return StatusCode(StatusCodes.Status403Forbidden,
+                new ErrorResponse("FORBIDDEN_ROLE", "No tiene permisos para realizar esta acción."));
+        }
+
+        if (!Guid.TryParse(cashShiftId, out var shiftId) || shiftId == Guid.Empty)
+        {
+            return BadRequest(new ErrorResponse(ErrorResponse.ValidationErrorCode, "El id del turno de caja tiene un formato inválido."));
+        }
+
+        var result = await shifts.GetSummaryByIdAsync(shiftId, ct);
+        if (result.Outcome == ShiftSummaryByIdOutcome.Found)
+        {
+            return Ok(result.Response);
+        }
+
+        return NotFound(ErrorResponse.CashShiftNotFound());
+    }
+
+    [HttpGet("open")]
+    [ProducesResponseType<IReadOnlyList<OpenShiftListItemResponse>>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType<ErrorResponse>(StatusCodes.Status403Forbidden)]
+    public async Task<IActionResult> GetOpenShifts(CancellationToken ct)
+    {
+        // Only Administrador and Gerente roles can access the supervisor open shifts list (PMC-30).
+        if (!User.IsInRole("Administrador") && !User.IsInRole("Gerente"))
+        {
+            return StatusCode(StatusCodes.Status403Forbidden,
+                new ErrorResponse("FORBIDDEN_ROLE", "No tiene permisos para realizar esta acción."));
+        }
+
+        var openShifts = await shifts.GetOpenShiftsAsync(ct);
+        return Ok(openShifts);
     }
 
     [HttpPost("open")]
@@ -97,6 +175,53 @@ public class CashShiftsController(
         }
 
         return UnprocessableEntity(new ErrorResponse("CASH_SHIFT_NOT_OPEN", result.Error!));
+    }
+
+    [HttpPost("{cash_shift_id}/force-close")]
+    [ProducesResponseType<ForceCloseCashShiftResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType<ErrorResponse>(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType<ErrorResponse>(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType<ErrorResponse>(StatusCodes.Status404NotFound)]
+    [ProducesResponseType<ErrorResponse>(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> ForceClose(
+        [FromRoute(Name = "cash_shift_id")] string cashShiftId,
+        ForceCloseCashShiftRequest request,
+        CancellationToken ct)
+    {
+        // Only Administrador and Gerente roles can force close shifts.
+        if (!User.IsInRole("Administrador") && !User.IsInRole("Gerente"))
+        {
+            return StatusCode(StatusCodes.Status403Forbidden,
+                new ErrorResponse("FORBIDDEN_ROLE", "No tiene permisos para realizar esta acción."));
+        }
+
+        if (!Guid.TryParse(cashShiftId, out var shiftId) || shiftId == Guid.Empty)
+        {
+            return BadRequest(new ErrorResponse(ErrorResponse.ValidationErrorCode, "El id del turno de caja tiene un formato inválido."));
+        }
+
+        var validation = await forceCloseValidator.ValidateAsync(request, ct);
+        if (!validation.IsValid)
+        {
+            return BadRequest(ErrorResponse.Validation(validation));
+        }
+
+        // Supervisor identity comes exclusively from the JWT claim (AC2).
+        var adminId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (string.IsNullOrEmpty(adminId))
+        {
+            return Unauthorized();
+        }
+
+        var result = await shifts.ForceCloseAsync(shiftId, request, adminId, ct);
+        return result.Outcome switch
+        {
+            ForceCloseShiftOutcome.Closed => Ok(result.Response),
+            ForceCloseShiftOutcome.ShiftNotFound => NotFound(ErrorResponse.CashShiftNotFound()),
+            ForceCloseShiftOutcome.ShiftAlreadyClosed => Conflict(ErrorResponse.CashShiftClosed()),
+            _ => StatusCode(StatusCodes.Status500InternalServerError, new ErrorResponse("INTERNAL_ERROR", "Ocurrió un error interno."))
+        };
     }
 }
 

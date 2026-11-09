@@ -24,7 +24,12 @@ public record BillItem(
     [property: JsonPropertyName("nombre")] string Name,
     [property: JsonPropertyName("cantidad")] int Quantity,
     [property: JsonPropertyName("precioUnitario")] decimal UnitPrice,
-    [property: JsonPropertyName("importe")] decimal Amount);
+    [property: JsonPropertyName("importe")] decimal Amount,
+    [property: JsonPropertyName("notas")] string? Notes = null)
+{
+    [JsonPropertyName("notes")]
+    public string? NotesAlt { init => Notes ??= value; }
+}
 
 public record BillTotals(
     decimal Subtotal,

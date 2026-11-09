@@ -21,4 +21,20 @@ public sealed class InMemoryPendingSessionIndex : IPendingSessionIndex
         _sessions.TryRemove(dinningSessionId, out _);
         return Task.CompletedTask;
     }
+
+    public Task<IReadOnlyList<Guid>> GetPendingSessionsAsync(DateTimeOffset? since = null)
+    {
+        var query = _sessions.AsEnumerable();
+        if (since.HasValue)
+        {
+            query = query.Where(kvp => kvp.Value >= since.Value);
+        }
+
+        IReadOnlyList<Guid> list = query
+            .OrderByDescending(kvp => kvp.Value)
+            .Select(kvp => kvp.Key)
+            .ToList();
+
+        return Task.FromResult(list);
+    }
 }

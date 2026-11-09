@@ -16,17 +16,18 @@ public class SalesExportService(PaymentsDbContext db)
     public const int FlushEvery = 500;
 
     private static readonly string[] Header =
-        ["Folio", "Fecha", "Estado", "Subtotal", "Impuestos", "Propina", "Total", "Efectivo", "Tarjetas"];
+        ["Folio", "Fecha", "Subtotal", "Impuestos", "Propina", "Total", "Efectivo", "Tarjetas"];
 
     private static readonly UTF8Encoding Utf8NoBom = new(encoderShouldEmitUTF8Identifier: false);
 
     /// <summary>
-    /// Deferred query over the sales whose sale date falls in [start, end), cancelled ones included. The end is
-    /// exclusive: CreatedAt keeps fractions of a second, so a month is exported as [1st 00:00, next 1st 00:00) and a
+    /// Deferred query over the sales whose sale date falls in [start, end). The end is exclusive:
+    /// CreatedAt keeps fractions of a second, so a month is exported as [1st 00:00, next 1st 00:00) and a
     /// sale at 23:59:59.400 on the last day can never fall between two consecutive reports.
     /// Cash and cards are summed from <see cref="PaymentBreakdown"/> in SQL. Tarjetas names CreditCard and DebitCard
     /// explicitly, so a payment method added later never lands in it by accident. Nothing is materialized:
-    /// the caller pulls one row at a time from the data reader (PMC-15 AC3).
+    /// the caller pulls one row at a time from the data reader (PMC-15 AC3, AC4).
+    /// All sales are assumed completed; status column was removed per PO agreement (05/11/2026).
     /// </summary>
     public IAsyncEnumerable<SalesExportRow> StreamRows(DateTimeOffset start, DateTimeOffset end) =>
         db.Transactions.AsNoTracking()
@@ -35,7 +36,6 @@ public class SalesExportService(PaymentsDbContext db)
             .Select(t => new SalesExportRow(
                 t.Folio,
                 t.CreatedAt,
-                t.Status,
                 t.Subtotal,
                 t.Taxes,
                 t.Tip,
@@ -83,7 +83,6 @@ public class SalesExportService(PaymentsDbContext db)
             var row = enumerator.Current;
             csv.WriteField(row.Folio);
             csv.WriteField(row.CreatedAt.UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture));
-            csv.WriteField(StatusLabel(row.Status));
             csv.WriteField(Money(row.Subtotal));
             csv.WriteField(Money(row.Taxes));
             csv.WriteField(Money(row.Tip));
@@ -124,14 +123,6 @@ public class SalesExportService(PaymentsDbContext db)
         var lastCovered = end > start ? end.AddTicks(-1) : end;
         return $"reporte_ventas_{start.UtcDateTime:yyyyMMdd}_{lastCovered.UtcDateTime:yyyyMMdd}.csv";
     }
-
-    // Same labels as the JSON contract (JsonStringEnumMemberName on TransactionStatus).
-    private static string StatusLabel(TransactionStatus status) => status switch
-    {
-        TransactionStatus.Completed => "COMPLETADO",
-        TransactionStatus.Cancelled => "CANCELADO",
-        _ => status.ToString().ToUpperInvariant()
-    };
 
     // decimal end to end (RNF-05); a fixed two-decimal invariant format keeps the file culture independent.
     private static string Money(decimal amount) => amount.ToString("0.00", CultureInfo.InvariantCulture);

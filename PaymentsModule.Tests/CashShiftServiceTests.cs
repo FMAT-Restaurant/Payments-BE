@@ -43,6 +43,7 @@ public class CashShiftServiceTests : IAsyncLifetime
             .AddScoped<IValidator<ChargeRequest>, ChargeRequestValidator>()
             .AddScoped<IValidator<OpenCashShiftRequest>, OpenCashShiftRequestValidator>()
             .AddScoped<IValidator<CloseCashShiftRequest>, CloseCashShiftRequestValidator>()
+            .AddScoped<IValidator<ForceCloseCashShiftRequest>, ForceCloseCashShiftRequestValidator>()
             .AddMassTransitTestHarness(x =>
             {
                 x.AddEntityFrameworkOutbox<PaymentsDbContext>(o =>
@@ -534,6 +535,478 @@ public class CashShiftServiceTests : IAsyncLifetime
             json);
     }
 
+    [Fact]
+    public async Task Summary_by_id_returns_accurate_totals_for_open_shift()
+    {
+        var cashier = NewCashier();
+        var opened = await OpenAsync(new OpenCashShiftRequest(500.00m), cashier);
+        await RecordSaleAsync(cashier, billTotal: 200.00m, tip: 0.00m, new PaymentRequest(PaymentMethod.Cash, 200.00m, null));
+        await RecordSaleAsync(cashier, billTotal: 350.00m, tip: 0.00m, new PaymentRequest(PaymentMethod.CreditCard, 350.00m, "AUTH-123"));
+
+        var summary = await GetSummaryByIdAsync(opened.Response!.CashShiftId);
+
+        Assert.Equal(ShiftSummaryByIdOutcome.Found, summary.Outcome);
+        Assert.NotNull(summary.Response);
+        Assert.Equal(opened.Response.CashShiftId, summary.Response.CashShiftId);
+        Assert.Equal(CashShiftStatus.Open, summary.Response.Status);
+        Assert.Equal(500.00m, summary.Response.OpeningFloat);
+        Assert.Equal(350.00m, summary.Response.CardTotal);
+        Assert.Equal(700.00m, summary.Response.ExpectedCash);
+    }
+
+    [Fact]
+    public async Task Summary_by_id_returns_final_totals_for_closed_shift_with_cerrado_status()
+    {
+        var cashier = NewCashier();
+        var opened = await OpenAsync(new OpenCashShiftRequest(500.00m), cashier);
+        await RecordSaleAsync(cashier, billTotal: 200.00m, tip: 0.00m, new PaymentRequest(PaymentMethod.Cash, 200.00m, null));
+        var closed = await CloseAsync(new CloseCashShiftRequest(700.00m), cashier);
+        Assert.Equal(CashShiftStatus.Closed, closed.Response!.Status);
+
+        var summary = await GetSummaryByIdAsync(opened.Response!.CashShiftId);
+
+        Assert.Equal(ShiftSummaryByIdOutcome.Found, summary.Outcome);
+        Assert.NotNull(summary.Response);
+        Assert.Equal(opened.Response.CashShiftId, summary.Response.CashShiftId);
+        Assert.Equal(CashShiftStatus.Closed, summary.Response.Status);
+        Assert.Equal(500.00m, summary.Response.OpeningFloat);
+        Assert.Equal(700.00m, summary.Response.ExpectedCash);
+    }
+
+    [Fact]
+    public async Task Summary_by_id_returns_final_totals_for_unbalanced_shift_with_descuadrado_status()
+    {
+        var cashier = NewCashier();
+        var opened = await OpenAsync(new OpenCashShiftRequest(500.00m), cashier);
+        await RecordSaleAsync(cashier, billTotal: 200.00m, tip: 0.00m, new PaymentRequest(PaymentMethod.Cash, 200.00m, null));
+        var closed = await CloseAsync(new CloseCashShiftRequest(650.00m), cashier);
+        Assert.Equal(CashShiftStatus.Unbalanced, closed.Response!.Status);
+
+        var summary = await GetSummaryByIdAsync(opened.Response!.CashShiftId);
+
+        Assert.Equal(ShiftSummaryByIdOutcome.Found, summary.Outcome);
+        Assert.NotNull(summary.Response);
+        Assert.Equal(opened.Response.CashShiftId, summary.Response.CashShiftId);
+        Assert.Equal(CashShiftStatus.Unbalanced, summary.Response.Status);
+        Assert.Equal(500.00m, summary.Response.OpeningFloat);
+        Assert.Equal(700.00m, summary.Response.ExpectedCash);
+    }
+
+    [Fact]
+    public async Task Summary_by_id_returns_not_found_when_shift_does_not_exist()
+    {
+        var nonExistentId = Guid.NewGuid();
+
+        var summary = await GetSummaryByIdAsync(nonExistentId);
+
+        Assert.Equal(ShiftSummaryByIdOutcome.NotFound, summary.Outcome);
+        Assert.Equal("El turno de caja no existe", summary.Error);
+    }
+
+    [Fact]
+    public async Task Summary_by_id_matches_cashier_summary_for_open_shift()
+    {
+        var cashier = NewCashier();
+        var opened = await OpenAsync(new OpenCashShiftRequest(500.00m), cashier);
+        await RecordSaleAsync(cashier, billTotal: 150.00m, tip: 0.00m, new PaymentRequest(PaymentMethod.Cash, 150.00m, null));
+        await RecordSaleAsync(cashier, billTotal: 250.00m, tip: 20.00m, new PaymentRequest(PaymentMethod.DebitCard, 270.00m, "DEBIT-999"));
+
+        var cashierSummary = await GetSummaryAsync(cashier);
+        var supervisorSummary = await GetSummaryByIdAsync(opened.Response!.CashShiftId);
+
+        Assert.Equal(ShiftSummaryOutcome.Found, cashierSummary.Outcome);
+        Assert.Equal(ShiftSummaryByIdOutcome.Found, supervisorSummary.Outcome);
+        Assert.Equal(cashierSummary.Response!.CashShiftId, supervisorSummary.Response!.CashShiftId);
+        Assert.Equal(cashierSummary.Response.Status, supervisorSummary.Response.Status);
+        Assert.Equal(cashierSummary.Response.OpeningFloat, supervisorSummary.Response.OpeningFloat);
+        Assert.Equal(cashierSummary.Response.CardTotal, supervisorSummary.Response.CardTotal);
+        Assert.Equal(cashierSummary.Response.ExpectedCash, supervisorSummary.Response.ExpectedCash);
+    }
+
+    [Theory]
+    [InlineData("Administrador", StatusCodes.Status200OK)]
+    [InlineData("Gerente", StatusCodes.Status200OK)]
+    [InlineData("Cajero", StatusCodes.Status403Forbidden)]
+    [InlineData(null, StatusCodes.Status403Forbidden)]
+    public async Task Controller_get_summary_by_id_authorizes_supervisors_and_rejects_cajero_with_403(string? role, int expectedStatus)
+    {
+        var cashier = NewCashier();
+        var opened = await OpenAsync(new OpenCashShiftRequest(500.00m), cashier);
+
+        var result = await ControllerGetSummaryByIdAsync(opened.Response!.CashShiftId.ToString(), role);
+
+        Assert.Equal(expectedStatus, result.StatusCode);
+        if (expectedStatus == StatusCodes.Status403Forbidden)
+        {
+            var error = Assert.IsType<ErrorResponse>(result.Value);
+            Assert.Equal("FORBIDDEN_ROLE", error.Code);
+            Assert.False(string.IsNullOrWhiteSpace(error.Message));
+        }
+        else
+        {
+            Assert.IsType<CashShiftSummaryResponse>(result.Value);
+        }
+    }
+
+    [Theory]
+    [InlineData("not-a-guid")]
+    [InlineData("00000000-0000-0000-0000-000000000000")]
+    public async Task Controller_get_summary_by_id_validates_input_format(string invalidId)
+    {
+        var result = await ControllerGetSummaryByIdAsync(invalidId, "Administrador");
+
+        Assert.Equal(StatusCodes.Status400BadRequest, result.StatusCode);
+        var error = Assert.IsType<ErrorResponse>(result.Value);
+        Assert.Equal(ErrorResponse.ValidationErrorCode, error.Code);
+    }
+
+    [Fact]
+    public async Task Controller_get_summary_by_id_returns_404_cash_shift_not_found_when_missing()
+    {
+        var result = await ControllerGetSummaryByIdAsync(Guid.NewGuid().ToString(), "Administrador");
+
+        Assert.Equal(StatusCodes.Status404NotFound, result.StatusCode);
+        var error = Assert.IsType<ErrorResponse>(result.Value);
+        Assert.Equal("CASH_SHIFT_NOT_FOUND", error.Code);
+        Assert.Equal("El turno de caja no existe", error.Message);
+    }
+
+    [Fact]
+    public async Task Get_active_shift_returns_active_shift_dto_when_open_shift_exists()
+    {
+        var cashier = NewCashier();
+        var opened = await OpenAsync(new OpenCashShiftRequest(1000.00m), cashier);
+
+        var active = await GetActiveShiftAsync(cashier);
+
+        Assert.NotNull(active);
+        Assert.Equal(opened.Response!.CashShiftId, active.CashShiftId);
+        Assert.Equal(1000.00m, active.OpeningFloat);
+        Assert.True(active.OpenedAt <= DateTimeOffset.UtcNow);
+    }
+
+    [Fact]
+    public async Task Get_active_shift_returns_null_when_no_shift_or_only_closed_shifts_exist()
+    {
+        var cashier = NewCashier();
+
+        var nonExistent = await GetActiveShiftAsync(cashier);
+        Assert.Null(nonExistent);
+
+        var opened = await OpenAsync(new OpenCashShiftRequest(500.00m), cashier);
+        await CloseAsync(new CloseCashShiftRequest(500.00m), cashier);
+
+        var closed = await GetActiveShiftAsync(cashier);
+        Assert.Null(closed);
+    }
+
+    [Theory]
+    [InlineData("Cajero", StatusCodes.Status200OK)]
+    [InlineData("Administrador", StatusCodes.Status200OK)]
+    [InlineData("Gerente", StatusCodes.Status200OK)]
+    public async Task Controller_get_active_shift_authorizes_allowed_roles(string role, int expectedStatus)
+    {
+        var cashier = NewCashier();
+        await OpenAsync(new OpenCashShiftRequest(800.00m), cashier);
+
+        var result = await ControllerGetActiveShiftAsync(cashier, role);
+
+        Assert.Equal(expectedStatus, result.StatusCode);
+        var active = Assert.IsType<ActiveCashShiftResponse>(result.Value);
+        Assert.Equal(800.00m, active.OpeningFloat);
+    }
+
+    [Fact]
+    public async Task Controller_get_active_shift_returns_404_when_no_open_shift()
+    {
+        var cashier = NewCashier();
+
+        var result = await ControllerGetActiveShiftAsync(cashier, "Cajero");
+
+        Assert.Equal(StatusCodes.Status404NotFound, result.StatusCode);
+        var error = Assert.IsType<ErrorResponse>(result.Value);
+        Assert.Equal("CASH_SHIFT_NOT_OPEN", error.Code);
+        Assert.Equal("No hay un turno de caja abierto para este usuario", error.Message);
+    }
+
+    [Fact]
+    public async Task Controller_get_active_shift_returns_401_when_anonymous()
+    {
+        var result = await ControllerGetActiveShiftAsync(cashierId: null);
+
+        Assert.Equal(StatusCodes.Status401Unauthorized, result.StatusCode);
+    }
+
+    [Fact]
+    public async Task Controller_get_active_shift_returns_403_when_role_unauthorized()
+    {
+        var cashier = NewCashier();
+        await OpenAsync(new OpenCashShiftRequest(500.00m), cashier);
+
+        var result = await ControllerGetActiveShiftAsync(cashier, role: "Mesero");
+
+        Assert.Equal(StatusCodes.Status403Forbidden, result.StatusCode);
+        var error = Assert.IsType<ErrorResponse>(result.Value);
+        Assert.Equal("FORBIDDEN_ROLE", error.Code);
+    }
+
+    [Fact]
+    public async Task Get_open_shifts_returns_open_shifts_ordered_by_opened_at_ascending()
+    {
+        var cashier1 = NewCashier();
+        var cashier2 = NewCashier();
+        var opened1 = await OpenAsync(new OpenCashShiftRequest(500.00m), cashier1, "Ana López");
+        await Task.Delay(20);
+        var opened2 = await OpenAsync(new OpenCashShiftRequest(750.00m), cashier2, "Carlos R.");
+
+        var list = await GetOpenShiftsAsync();
+
+        Assert.NotEmpty(list);
+        var first = list.First(s => s.CashShiftId == opened1.Response!.CashShiftId);
+        var second = list.First(s => s.CashShiftId == opened2.Response!.CashShiftId);
+        Assert.Equal("Ana López", first.CashierName);
+        Assert.Equal(500.00m, first.OpeningFloat);
+        Assert.Equal("Carlos R.", second.CashierName);
+        Assert.Equal(750.00m, second.OpeningFloat);
+        Assert.True(first.OpenedAt <= second.OpenedAt);
+    }
+
+    [Fact]
+    public async Task Get_open_shifts_excludes_closed_shifts()
+    {
+        var cashier = NewCashier();
+        var opened = await OpenAsync(new OpenCashShiftRequest(500.00m), cashier);
+        await CloseAsync(new CloseCashShiftRequest(500.00m), cashier);
+
+        var list = await GetOpenShiftsAsync();
+
+        Assert.DoesNotContain(list, s => s.CashShiftId == opened.Response!.CashShiftId);
+    }
+
+    [Theory]
+    [InlineData("Administrador", StatusCodes.Status200OK)]
+    [InlineData("Gerente", StatusCodes.Status200OK)]
+    public async Task Controller_get_open_shifts_authorizes_management_roles(string role, int expectedStatus)
+    {
+        var result = await ControllerGetOpenShiftsAsync(role);
+
+        Assert.Equal(expectedStatus, result.StatusCode);
+        Assert.IsAssignableFrom<IEnumerable<OpenShiftListItemResponse>>(result.Value);
+    }
+
+    [Fact]
+    public async Task Controller_get_open_shifts_rejects_cajero_with_403_forbidden_role()
+    {
+        var result = await ControllerGetOpenShiftsAsync(role: "Cajero");
+
+        Assert.Equal(StatusCodes.Status403Forbidden, result.StatusCode);
+        var error = Assert.IsType<ErrorResponse>(result.Value);
+        Assert.Equal("FORBIDDEN_ROLE", error.Code);
+    }
+
+    [Fact]
+    public async Task Force_close_by_admin_with_exact_cash_transitions_to_closed_and_records_audit()
+    {
+        var cashier = NewCashier();
+        var opened = await OpenAsync(new OpenCashShiftRequest(500.00m), cashier);
+        await RecordSaleAsync(cashier, billTotal: 200.00m, tip: 0.00m, new PaymentRequest(PaymentMethod.Cash, 200.00m, null));
+        var shiftId = opened.Response!.CashShiftId;
+
+        var request = new ForceCloseCashShiftRequest(700.00m, "El cajero finalizó su turno y abandonó las instalaciones sin ejecutar el corte en el sistema.");
+        var result = await ForceCloseAsync(shiftId, request, "admin-123");
+
+        Assert.Equal(ForceCloseShiftOutcome.Closed, result.Outcome);
+        var resp = result.Response;
+        Assert.NotNull(resp);
+        Assert.Equal(shiftId, resp.CashShiftId);
+        Assert.Equal("Ana López", resp.CashierName);
+        Assert.Equal(CashShiftStatus.Closed, resp.Status);
+        Assert.Equal(500.00m, resp.OpeningFloat);
+        Assert.Equal(700.00m, resp.ExpectedCash);
+        Assert.Equal(700.00m, resp.DeclaredCash);
+        Assert.Equal(0.00m, resp.Difference);
+        Assert.Equal(0, resp.CardTransactionCount);
+        Assert.Equal(0.00m, resp.RetainedTips);
+        Assert.Contains("corte exacto", resp.Message);
+
+        var saved = await FindShiftAsync(shiftId);
+        Assert.NotNull(saved);
+        Assert.Equal(CashShiftStatus.Closed, saved.Status);
+        Assert.Equal("admin-123", saved.ClosedByAdminId);
+        Assert.Equal(request.ForceCloseReason, saved.ForceCloseReason);
+        Assert.Equal(700.00m, saved.DeclaredCash);
+        Assert.Equal(700.00m, saved.ExpectedCash);
+        Assert.Equal(0.00m, saved.Difference);
+        Assert.NotNull(saved.ClosedAt);
+    }
+
+    [Fact]
+    public async Task Force_close_by_manager_with_shortage_transitions_to_unbalanced_and_records_audit()
+    {
+        var cashier = NewCashier();
+        var opened = await OpenAsync(new OpenCashShiftRequest(500.00m), cashier);
+        await RecordSaleAsync(cashier, billTotal: 1750.00m, tip: 0.00m,
+            new PaymentRequest(PaymentMethod.Cash, 1750.00m, null));
+        await RecordSaleAsync(cashier, billTotal: 300.00m, tip: 120.00m,
+            new PaymentRequest(PaymentMethod.CreditCard, 420.00m, "AUTH-1"));
+        var shiftId = opened.Response!.CashShiftId;
+
+        var request = new ForceCloseCashShiftRequest(2100.00m, "El cajero finalizó su turno y abandonó las instalaciones sin ejecutar el corte en el sistema.");
+        var result = await ForceCloseAsync(shiftId, request, "gerente-456");
+
+        Assert.Equal(ForceCloseShiftOutcome.Closed, result.Outcome);
+        var resp = result.Response;
+        Assert.NotNull(resp);
+        Assert.Equal(shiftId, resp.CashShiftId);
+        Assert.Equal(CashShiftStatus.Unbalanced, resp.Status);
+        Assert.Equal(500.00m, resp.OpeningFloat);
+        Assert.Equal(2250.00m, resp.ExpectedCash);
+        Assert.Equal(2100.00m, resp.DeclaredCash);
+        Assert.Equal(-150.00m, resp.Difference);
+        Assert.Equal(1, resp.CardTransactionCount);
+        Assert.Equal(120.00m, resp.RetainedTips);
+        Assert.Equal("Cierre forzado ejecutado exitosamente con faltante de caja.", resp.Message);
+
+        var saved = await FindShiftAsync(shiftId);
+        Assert.NotNull(saved);
+        Assert.Equal(CashShiftStatus.Unbalanced, saved.Status);
+        Assert.Equal("gerente-456", saved.ClosedByAdminId);
+        Assert.Equal(request.ForceCloseReason, saved.ForceCloseReason);
+        Assert.Equal(-150.00m, saved.Difference);
+    }
+
+    [Fact]
+    public async Task Force_close_with_surplus_transitions_to_unbalanced_with_surplus_message()
+    {
+        var cashier = NewCashier();
+        var opened = await OpenAsync(new OpenCashShiftRequest(500.00m), cashier);
+        var shiftId = opened.Response!.CashShiftId;
+
+        var request = new ForceCloseCashShiftRequest(600.00m, "Supervisor cerró turno con dinero sobrante.");
+        var result = await ForceCloseAsync(shiftId, request, "admin-1");
+
+        Assert.Equal(ForceCloseShiftOutcome.Closed, result.Outcome);
+        Assert.Equal(CashShiftStatus.Unbalanced, result.Response!.Status);
+        Assert.Equal(100.00m, result.Response.Difference);
+        Assert.Equal("Cierre forzado ejecutado exitosamente con sobrante de caja.", result.Response.Message);
+    }
+
+    [Fact]
+    public async Task Force_close_returns_not_found_when_shift_does_not_exist()
+    {
+        var nonExistentId = Guid.NewGuid();
+        var request = new ForceCloseCashShiftRequest(1000.00m, "Razón de cierre forzado válida.");
+
+        var result = await ForceCloseAsync(nonExistentId, request, "admin-1");
+
+        Assert.Equal(ForceCloseShiftOutcome.ShiftNotFound, result.Outcome);
+        Assert.Equal("El turno de caja no existe", result.Error);
+    }
+
+    [Fact]
+    public async Task Force_close_returns_already_closed_when_shift_is_not_open()
+    {
+        var cashier = NewCashier();
+        var opened = await OpenAsync(new OpenCashShiftRequest(500.00m), cashier);
+        await CloseAsync(new CloseCashShiftRequest(500.00m), cashier);
+        var shiftId = opened.Response!.CashShiftId;
+
+        var request = new ForceCloseCashShiftRequest(500.00m, "Intento de forzar cierre sobre turno ya cerrado.");
+        var result = await ForceCloseAsync(shiftId, request, "admin-1");
+
+        Assert.Equal(ForceCloseShiftOutcome.ShiftAlreadyClosed, result.Outcome);
+        Assert.Equal("El turno de caja ya ha sido cerrado", result.Error);
+    }
+
+    [Theory]
+    [InlineData("Administrador", StatusCodes.Status200OK)]
+    [InlineData("Gerente", StatusCodes.Status200OK)]
+    [InlineData("Cajero", StatusCodes.Status403Forbidden)]
+    [InlineData(null, StatusCodes.Status403Forbidden)]
+    public async Task Controller_force_close_authorizes_supervisors_and_rejects_cajero_with_403(string? role, int expectedStatus)
+    {
+        var cashier = NewCashier();
+        var opened = await OpenAsync(new OpenCashShiftRequest(500.00m), cashier);
+        var request = new ForceCloseCashShiftRequest(500.00m, "Razón válida para forzar cierre.");
+
+        var result = await ControllerForceCloseAsync(opened.Response!.CashShiftId.ToString(), request, role);
+
+        Assert.Equal(expectedStatus, result.StatusCode);
+        if (expectedStatus == StatusCodes.Status403Forbidden)
+        {
+            var error = Assert.IsType<ErrorResponse>(result.Value);
+            Assert.Equal("FORBIDDEN_ROLE", error.Code);
+            Assert.False(string.IsNullOrWhiteSpace(error.Message));
+        }
+        else
+        {
+            Assert.IsType<ForceCloseCashShiftResponse>(result.Value);
+        }
+    }
+
+    [Theory]
+    [InlineData("not-a-guid")]
+    [InlineData("00000000-0000-0000-0000-000000000000")]
+    public async Task Controller_force_close_validates_guid_format(string invalidId)
+    {
+        var request = new ForceCloseCashShiftRequest(500.00m, "Razón válida para forzar cierre.");
+        var result = await ControllerForceCloseAsync(invalidId, request, "Administrador");
+
+        Assert.Equal(StatusCodes.Status400BadRequest, result.StatusCode);
+        var error = Assert.IsType<ErrorResponse>(result.Value);
+        Assert.Equal(ErrorResponse.ValidationErrorCode, error.Code);
+    }
+
+    [Fact]
+    public async Task Controller_force_close_validates_body_inputs()
+    {
+        var validId = Guid.NewGuid().ToString();
+
+        // Null declared cash
+        var result1 = await ControllerForceCloseAsync(validId, new ForceCloseCashShiftRequest(null, "Motivo válido de más de diez caracteres."), "Administrador");
+        Assert.Equal(StatusCodes.Status400BadRequest, result1.StatusCode);
+
+        // Negative declared cash
+        var result2 = await ControllerForceCloseAsync(validId, new ForceCloseCashShiftRequest(-10m, "Motivo válido de más de diez caracteres."), "Administrador");
+        Assert.Equal(StatusCodes.Status400BadRequest, result2.StatusCode);
+
+        // Empty reason
+        var result3 = await ControllerForceCloseAsync(validId, new ForceCloseCashShiftRequest(100m, ""), "Administrador");
+        Assert.Equal(StatusCodes.Status400BadRequest, result3.StatusCode);
+
+        // Reason too short (< 10 chars)
+        var result4 = await ControllerForceCloseAsync(validId, new ForceCloseCashShiftRequest(100m, "Corto"), "Administrador");
+        Assert.Equal(StatusCodes.Status400BadRequest, result4.StatusCode);
+    }
+
+    [Fact]
+    public async Task Controller_force_close_returns_404_when_shift_missing()
+    {
+        var request = new ForceCloseCashShiftRequest(500.00m, "Motivo válido de cierre forzado.");
+        var result = await ControllerForceCloseAsync(Guid.NewGuid().ToString(), request, "Administrador");
+
+        Assert.Equal(StatusCodes.Status404NotFound, result.StatusCode);
+        var error = Assert.IsType<ErrorResponse>(result.Value);
+        Assert.Equal("CASH_SHIFT_NOT_FOUND", error.Code);
+        Assert.Equal("El turno de caja no existe", error.Message);
+    }
+
+    [Fact]
+    public async Task Controller_force_close_returns_409_when_shift_already_closed()
+    {
+        var cashier = NewCashier();
+        var opened = await OpenAsync(new OpenCashShiftRequest(500.00m), cashier);
+        await CloseAsync(new CloseCashShiftRequest(500.00m), cashier);
+
+        var request = new ForceCloseCashShiftRequest(500.00m, "Motivo válido de cierre forzado.");
+        var result = await ControllerForceCloseAsync(opened.Response!.CashShiftId.ToString(), request, "Administrador");
+
+        Assert.Equal(StatusCodes.Status409Conflict, result.StatusCode);
+        var error = Assert.IsType<ErrorResponse>(result.Value);
+        Assert.Equal("CASH_SHIFT_CLOSED", error.Code);
+        Assert.Equal("El turno de caja ya ha sido cerrado", error.Message);
+    }
+
     private static string NewCashier() => $"cashier-{Guid.NewGuid()}";
 
     private async Task<ShiftSummaryResult> GetSummaryAsync(string cashierId)
@@ -542,10 +1015,29 @@ public class CashShiftServiceTests : IAsyncLifetime
         return await scope.ServiceProvider.GetRequiredService<CashShiftService>().GetSummaryAsync(cashierId);
     }
 
-    private async Task<OpenShiftResult> OpenAsync(OpenCashShiftRequest request, string cashierId)
+    private async Task<ShiftSummaryByIdResult> GetSummaryByIdAsync(Guid shiftId)
     {
         await using var scope = _provider.CreateAsyncScope();
-        return await scope.ServiceProvider.GetRequiredService<CashShiftService>().OpenAsync(request, cashierId, "Ana López");
+        return await scope.ServiceProvider.GetRequiredService<CashShiftService>().GetSummaryByIdAsync(shiftId);
+    }
+
+    private async Task<ActiveCashShiftResponse?> GetActiveShiftAsync(string cashierId)
+    {
+        await using var scope = _provider.CreateAsyncScope();
+        var result = await scope.ServiceProvider.GetRequiredService<CashShiftService>().GetActiveAsync(cashierId);
+        return result.Response;
+    }
+
+    private async Task<IReadOnlyList<OpenShiftListItemResponse>> GetOpenShiftsAsync()
+    {
+        await using var scope = _provider.CreateAsyncScope();
+        return await scope.ServiceProvider.GetRequiredService<CashShiftService>().GetOpenShiftsAsync();
+    }
+
+    private async Task<OpenShiftResult> OpenAsync(OpenCashShiftRequest request, string cashierId, string? cashierName = null)
+    {
+        await using var scope = _provider.CreateAsyncScope();
+        return await scope.ServiceProvider.GetRequiredService<CashShiftService>().OpenAsync(request, cashierId, cashierName ?? "Ana López");
     }
 
     private async Task<CloseShiftResult> CloseAsync(CloseCashShiftRequest request, string cashierId)
@@ -554,9 +1046,42 @@ public class CashShiftServiceTests : IAsyncLifetime
         return await scope.ServiceProvider.GetRequiredService<CashShiftService>().CloseAsync(request, cashierId);
     }
 
-    private async Task RecordSaleAsync(string cashierId, decimal billTotal, decimal tip, PaymentRequest payment)
+    private async Task<ForceCloseShiftResult> ForceCloseAsync(Guid shiftId, ForceCloseCashShiftRequest request, string adminId)
     {
-        var result = await TryChargeOnShiftAsync(cashierId, billTotal, tip, payment);
+        await using var scope = _provider.CreateAsyncScope();
+        return await scope.ServiceProvider.GetRequiredService<CashShiftService>().ForceCloseAsync(shiftId, request, adminId);
+    }
+
+    private async Task<ObjectResult> ControllerForceCloseAsync(
+        string cashShiftId,
+        ForceCloseCashShiftRequest request,
+        string? role = "Administrador",
+        string? adminId = "supervisor-user")
+    {
+        await using var scope = _provider.CreateAsyncScope();
+        var controller = CreateController(scope.ServiceProvider, adminId, role);
+        return ToObjectResult(await controller.ForceClose(cashShiftId, request, CancellationToken.None));
+    }
+
+    private async Task RecordSaleAsync(string cashierId, decimal billTotal, decimal tip, params PaymentRequest[] payments)
+    {
+        var session = Guid.NewGuid();
+        await using var scope = _provider.CreateAsyncScope();
+        await scope.ServiceProvider.GetRequiredService<PendingBillService>().SaveSnapshotAsync(new DinningSessionReadyEvent(
+            Guid.NewGuid(), session, Guid.NewGuid(), Guid.NewGuid(), DateTimeOffset.UtcNow,
+            [new BillItem(Guid.NewGuid(), "Tacos al Pastor", 1, billTotal, billTotal)],
+            new BillTotals(billTotal, 0m, billTotal)));
+
+        var paymentList = payments.Length > 0
+            ? payments.ToList()
+            : [new PaymentRequest(PaymentMethod.Cash, billTotal + tip, null)];
+
+        var request = new ChargeRequest(
+            session,
+            tip,
+            paymentList);
+
+        var result = await scope.ServiceProvider.GetRequiredService<ChargeService>().ChargeAsync(request, cashierId);
         Assert.Equal(ChargeOutcome.Completed, result.Outcome);
     }
 
@@ -586,6 +1111,27 @@ public class CashShiftServiceTests : IAsyncLifetime
         return ToObjectResult(await controller.GetSummary(CancellationToken.None));
     }
 
+    private async Task<ObjectResult> ControllerGetActiveShiftAsync(string? cashierId, string? role = "Cajero")
+    {
+        await using var scope = _provider.CreateAsyncScope();
+        var controller = CreateController(scope.ServiceProvider, cashierId, role);
+        return ToObjectResult(await controller.GetMyActiveShift(CancellationToken.None));
+    }
+
+    private async Task<ObjectResult> ControllerGetOpenShiftsAsync(string? role = "Administrador", string? cashierId = "supervisor-user")
+    {
+        await using var scope = _provider.CreateAsyncScope();
+        var controller = CreateController(scope.ServiceProvider, cashierId, role);
+        return ToObjectResult(await controller.GetOpenShifts(CancellationToken.None));
+    }
+
+    private async Task<ObjectResult> ControllerGetSummaryByIdAsync(string cashShiftId, string? role = "Administrador", string? cashierId = "supervisor-user")
+    {
+        await using var scope = _provider.CreateAsyncScope();
+        var controller = CreateController(scope.ServiceProvider, cashierId, role);
+        return ToObjectResult(await controller.GetSummaryById(cashShiftId, CancellationToken.None));
+    }
+
     private async Task<ObjectResult> ControllerOpenAsync(OpenCashShiftRequest request, string? cashierId)
     {
         await using var scope = _provider.CreateAsyncScope();
@@ -600,13 +1146,23 @@ public class CashShiftServiceTests : IAsyncLifetime
         return ToObjectResult(await controller.Close(request, CancellationToken.None));
     }
 
-    private static CashShiftsController CreateController(IServiceProvider services, string? cashierId)
+    private static CashShiftsController CreateController(IServiceProvider services, string? cashierId, string? role = null)
     {
-        var claims = cashierId is null ? [] : new[] { new Claim(ClaimTypes.NameIdentifier, cashierId) };
+        var claims = new List<Claim>();
+        if (cashierId is not null)
+        {
+            claims.Add(new Claim(ClaimTypes.NameIdentifier, cashierId));
+        }
+        if (role is not null)
+        {
+            claims.Add(new Claim(ClaimTypes.Role, role));
+        }
+
         return new CashShiftsController(
             services.GetRequiredService<CashShiftService>(),
             services.GetRequiredService<IValidator<OpenCashShiftRequest>>(),
-            services.GetRequiredService<IValidator<CloseCashShiftRequest>>())
+            services.GetRequiredService<IValidator<CloseCashShiftRequest>>(),
+            services.GetRequiredService<IValidator<ForceCloseCashShiftRequest>>())
         {
             ControllerContext = new ControllerContext
             {

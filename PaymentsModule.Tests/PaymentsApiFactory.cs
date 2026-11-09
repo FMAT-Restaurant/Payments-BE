@@ -67,6 +67,7 @@ public sealed class PaymentsApiFactory : WebApplicationFactory<Program>
                     new DbContextOptionsBuilder<PaymentsDbContext>().UseSqlServer(ConnectionString).Options);
                 await db.Database.EnsureDeletedAsync();
                 await db.Database.MigrateAsync();
+                Microsoft.Data.SqlClient.SqlConnection.ClearAllPools();
                 _migrated = true;
             }
         }

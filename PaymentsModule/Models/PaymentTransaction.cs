@@ -11,7 +11,6 @@ public class PaymentTransaction
     public Guid DinningSessionId { get; set; }
     public Guid CashShiftId { get; set; }
     public required string CashierId { get; set; }
-
     /// <summary>Table name from the PMC-5 snapshot; null while Órdenes does not publish it.</summary>
     public string? TableName { get; set; }
 
@@ -22,7 +21,7 @@ public class PaymentTransaction
     /// <summary>Subtotal + taxes + tip. Always equals the sum of <see cref="Payments"/>.</summary>
     public decimal Total { get; set; }
 
-    /// <summary>Cash handed back to the customer (PMC-6 AC4 / PMC-13). Never part of <see cref="Payments"/>.</summary>
+    /// <summary>Cash handed back to the customer; persisted for detail and audit (PMC-6 / PMC-11).</summary>
     public decimal ChangeGiven { get; set; }
 
     public TransactionStatus Status { get; set; }

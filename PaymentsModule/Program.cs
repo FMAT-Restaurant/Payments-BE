@@ -39,6 +39,7 @@ builder.Services.AddAuthorization();
 builder.Services.AddStackExchangeRedisCache(options =>
     options.Configuration = builder.Configuration.GetConnectionString("Redis"));
 builder.Services.AddScoped<IValidator<DinningSessionReadyEvent>, DinningSessionReadyEventValidator>();
+builder.Services.AddScoped<IValidator<DinningSessionCancelledEvent>, DinningSessionCancelledEventValidator>();
 // Created on first use, so test hosts that replace the index never open a Redis connection.
 builder.Services.AddSingleton<IConnectionMultiplexer>(_ =>
     ConnectionMultiplexer.Connect(builder.Configuration.GetConnectionString("Redis")!));
@@ -49,6 +50,7 @@ builder.Services.AddScoped<ChargeService>();
 builder.Services.AddSingleton<IChargeCalculationService, ChargeCalculationService>();
 builder.Services.AddScoped<IValidator<OpenCashShiftRequest>, OpenCashShiftRequestValidator>();
 builder.Services.AddScoped<IValidator<CloseCashShiftRequest>, CloseCashShiftRequestValidator>();
+builder.Services.AddScoped<IValidator<ForceCloseCashShiftRequest>, ForceCloseCashShiftRequestValidator>();
 builder.Services.AddScoped<CashShiftService>();
 builder.Services.AddScoped<TransactionDetailService>();
 builder.Services.AddScoped<IValidator<SalesHistoryQuery>, SalesHistoryQueryValidator>();
@@ -63,6 +65,7 @@ builder.Services.AddDbContext<PaymentsDbContext>(options =>
 builder.Services.AddMassTransit(x =>
 {
     x.AddConsumer<DinningSessionReadyConsumer, DinningSessionReadyConsumerDefinition>();
+    x.AddConsumer<DinningSessionCancelledConsumer, DinningSessionCancelledConsumerDefinition>();
     // Bus outbox: events published from services are stored with the DbContext and only sent after COMMIT.
     x.AddEntityFrameworkOutbox<PaymentsDbContext>(o =>
     {

@@ -19,3 +19,12 @@ public class CloseCashShiftRequestValidator : AbstractValidator<CloseCashShiftRe
     }
 }
 
+public class ForceCloseCashShiftRequestValidator : AbstractValidator<ForceCloseCashShiftRequest>
+{
+    public ForceCloseCashShiftRequestValidator()
+    {
+        RuleFor(x => x.DeclaredCash).NotNull().GreaterThanOrEqualTo(0m).PrecisionScale(18, 2, true);
+        RuleFor(x => x.ForceCloseReason).NotEmpty().MinimumLength(10);
+    }
+}
+

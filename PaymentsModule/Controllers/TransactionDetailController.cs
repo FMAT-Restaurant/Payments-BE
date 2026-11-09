@@ -17,6 +17,11 @@ public class TransactionDetailController(TransactionDetailService details) : Con
     [ProducesResponseType<ErrorResponse>(StatusCodes.Status500InternalServerError)]
     public async Task<IActionResult> GetByFolio(string folio, CancellationToken ct)
     {
+        if (string.IsNullOrWhiteSpace(folio))
+        {
+            return NotFound(ErrorResponse.TransactionNotFound(folio ?? string.Empty));
+        }
+
         // Database failures (e.g. a timeout) are not caught here: the global exception handler answers 500 without internals.
         var detail = await details.GetByFolioAsync(folio, ct);
         if (detail is null)
