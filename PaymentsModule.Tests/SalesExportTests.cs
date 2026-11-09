@@ -85,10 +85,10 @@ public class SalesExportTests : IAsyncLifetime
         Assert.Equal(
             new[]
             {
-                "Folio,Fecha,Estado,Subtotal,Impuestos,Propina,Total,Efectivo,Tarjetas",
-                $"{mixed},{start.AddHours(10):yyyy-MM-dd}T10:00:00Z,COMPLETADO,100.00,16.00,10.00,126.00,26.00,100.00",
-                $"{cards},{start.AddDays(1):yyyy-MM-dd}T00:00:00Z,COMPLETADO,50.00,8.00,0.00,58.00,0.00,58.00",
-                $"{cancelled},{start.AddDays(2):yyyy-MM-dd}T00:00:00Z,CANCELADO,200.00,32.00,0.00,232.00,232.00,0.00"
+                "Folio,Fecha,Subtotal,Impuestos,Propina,Total,Efectivo,Tarjetas",
+                $"{mixed},{start.AddHours(10):yyyy-MM-dd}T10:00:00Z,100.00,16.00,10.00,126.00,26.00,100.00",
+                $"{cards},{start.AddDays(1):yyyy-MM-dd}T00:00:00Z,50.00,8.00,0.00,58.00,0.00,58.00",
+                $"{cancelled},{start.AddDays(2):yyyy-MM-dd}T00:00:00Z,200.00,32.00,0.00,232.00,232.00,0.00"
             },
             Lines(export.Body));
         Assert.DoesNotContain(outside, export.Body);
@@ -108,8 +108,8 @@ public class SalesExportTests : IAsyncLifetime
         Assert.Equal(
             new[]
             {
-                "Folio,Fecha,Estado,Subtotal,Impuestos,Propina,Total,Efectivo,Tarjetas",
-                $"{folio},{start:yyyy-MM-dd}T09:00:00Z,COMPLETADO,150.00,24.00,6.00,180.00,0.00,180.00"
+                "Folio,Fecha,Subtotal,Impuestos,Propina,Total,Efectivo,Tarjetas",
+                $"{folio},{start:yyyy-MM-dd}T09:00:00Z,150.00,24.00,6.00,180.00,0.00,180.00"
             },
             Lines(export.Body));
     }
@@ -147,7 +147,7 @@ public class SalesExportTests : IAsyncLifetime
         var export = await ExportAsync(start, start.AddDays(31));
 
         Assert.Equal(StatusCodes.Status200OK, export.Http.Response.StatusCode);
-        Assert.Equal(new[] { "Folio,Fecha,Estado,Subtotal,Impuestos,Propina,Total,Efectivo,Tarjetas" }, Lines(export.Body));
+        Assert.Equal(new[] { "Folio,Fecha,Subtotal,Impuestos,Propina,Total,Efectivo,Tarjetas" }, Lines(export.Body));
     }
 
     // Scenario 1 (volume): 10,000 sales leave in many chunks instead of one buffered write.
@@ -163,7 +163,7 @@ public class SalesExportTests : IAsyncLifetime
         Assert.Equal(StatusCodes.Status200OK, export.Http.Response.StatusCode);
         var lines = Lines(export.Body);
         Assert.Equal(10_001, lines.Length);
-        Assert.All(lines.Skip(1), l => Assert.EndsWith(",COMPLETADO,100.00,16.00,0.00,116.00,116.00,0.00", l.Split(',', 2)[1]));
+        Assert.All(lines.Skip(1), l => Assert.EndsWith(",100.00,16.00,0.00,116.00,116.00,0.00", l.Split(',', 2)[1]));
         Assert.True(body.Writes >= 10_000 / SalesExportService.FlushEvery, $"Expected chunked writes, got {body.Writes}.");
     }
 
@@ -190,8 +190,8 @@ public class SalesExportTests : IAsyncLifetime
         var export = await ExportAsync(null, null);
 
         var error = Assert.IsType<ErrorResponse>(Assert.IsType<BadRequestObjectResult>(export.Result).Value);
-        Assert.Contains("inicio", error.Message);
-        Assert.Contains("fin", error.Message);
+        Assert.Contains("start_date", error.Message);
+        Assert.Contains("end_date", error.Message);
     }
 
     [Theory]
@@ -223,11 +223,11 @@ public class SalesExportTests : IAsyncLifetime
         _probe.FailAfterRows = null;
         Assert.True(export.Lifetime.Aborted);
         Assert.Contains(_logs.Entries, e => e.Level == LogLevel.Error && e.Exception is SimulatedConnectionLoss && e.Message.Contains("failed mid-stream"));
-        // Only whole blocks reached the client: header + the first 500 rows, each with 9 fields, ending in a line break.
+        // Only whole blocks reached the client: header + the first 500 rows, each with 8 fields, ending in a line break.
         Assert.EndsWith("\r\n", export.Body);
         var lines = Lines(export.Body);
         Assert.Equal(1 + SalesExportService.FlushEvery, lines.Length);
-        Assert.All(lines, l => Assert.Equal(9, l.Split(',').Length));
+        Assert.All(lines, l => Assert.Equal(8, l.Split(',').Length));
     }
 
     // Scenario 3, before anything is sent: the database fails on the very first row. Nothing may reach the body, so
@@ -352,7 +352,7 @@ public class SalesExportTests : IAsyncLifetime
             ControllerContext = new ControllerContext { HttpContext = http }
         };
 
-        var result = await controller.Export(start, end, CancellationToken.None);
+        var result = await controller.Export(new SalesExportQuery(start, end), CancellationToken.None);
         return new Export(result, http, lifetime, System.Text.Encoding.UTF8.GetString(body.ToArray()));
     }
 
@@ -395,6 +395,7 @@ public class SalesExportTests : IAsyncLifetime
             DinningSessionId = Guid.NewGuid(),
             CashShiftId = shift,
             CashierId = "cashier-export",
+            TableName = "Mesa 01",
             Subtotal = subtotal,
             Taxes = taxes,
             Tip = tip,
@@ -412,8 +413,8 @@ public class SalesExportTests : IAsyncLifetime
         await using var scope = _provider.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<PaymentsDbContext>();
         await db.Database.ExecuteSqlInterpolatedAsync($"""
-            INSERT INTO Transactions (Id, Number, Folio, DinningSessionId, CashShiftId, CashierId, Subtotal, Taxes, Tip, Total, Status, CreatedAt)
-            SELECT NEWID(), {firstNumber} + n, CONCAT('TX-BULK-', {firstNumber} + n), NEWID(), {shift}, 'cashier-export',
+            INSERT INTO Transactions (Id, Number, Folio, DinningSessionId, CashShiftId, CashierId, TableName, Subtotal, Taxes, Tip, Total, Status, CreatedAt)
+            SELECT NEWID(), {firstNumber} + n, CONCAT('TX-BULK-', {firstNumber} + n), NEWID(), {shift}, 'cashier-export', 'Mesa 01',
                    100.00, 16.00, 0.00, 116.00, 'Completed', DATEADD(SECOND, n, {start})
             FROM (SELECT TOP ({count}) ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS n
                   FROM sys.all_objects a CROSS JOIN sys.all_objects b) numbers;

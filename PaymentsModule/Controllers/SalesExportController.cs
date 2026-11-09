@@ -21,24 +21,26 @@ public class SalesExportController(
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
     public async Task<IActionResult> Export(
-        [FromQuery(Name = "inicio")] DateTimeOffset? start,
-        [FromQuery(Name = "fin")] DateTimeOffset? end,
+        [FromQuery] SalesExportQuery query,
         CancellationToken ct)
     {
-        // Validated before any database access (PMC-15 scenario 2).
-        var validation = await validator.ValidateAsync(new SalesExportQuery(start, end), ct);
+        // Validated before any database access (PMC-15 AC2).
+        var validation = await validator.ValidateAsync(query, ct);
         if (!validation.IsValid)
         {
             return BadRequest(ErrorResponse.Validation(validation));
         }
 
+        var start = query.StartDate!.Value;
+        var end = query.EndDate!.Value;
+
         // No Content-Length: Kestrel sends the body with Transfer-Encoding: chunked.
         Response.ContentType = SalesExportService.ContentType;
-        Response.Headers.ContentDisposition = $"attachment; filename=\"{SalesExportService.FileName(start!.Value, end!.Value)}\"";
+        Response.Headers.ContentDisposition = $"attachment; filename=\"{SalesExportService.FileName(start, end)}\"";
 
         try
         {
-            var rows = await SalesExportService.WriteCsvAsync(exports.StreamRows(start.Value, end.Value), Response.Body, ct);
+            var rows = await SalesExportService.WriteCsvAsync(exports.StreamRows(start, end), Response.Body, ct);
             logger.LogInformation("Sales export {Start:o} - {End:o} streamed {Rows} rows.", start, end, rows);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -46,7 +48,7 @@ public class SalesExportController(
             logger.LogInformation("Sales export {Start:o} - {End:o} cancelled by the client.", start, end);
         }
         // Once bytes are on the wire the status cannot become 500: close the connection so the client sees
-        // an incomplete download instead of a file that looks finished (PMC-15 scenario 3).
+        // an incomplete download instead of a file that looks finished (PMC-15 AC6).
         catch (Exception ex) when (Response.HasStarted)
         {
             logger.LogError(ex, "Sales export {Start:o} - {End:o} failed mid-stream; aborting the response.", start, end);

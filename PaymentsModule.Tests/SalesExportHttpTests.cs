@@ -11,7 +11,7 @@ namespace PaymentsModule.Tests;
 // covering what DefaultHttpContext cannot prove: real status codes and a response that really has started.
 public class SalesExportHttpTests(PaymentsApiFactory api) : IClassFixture<PaymentsApiFactory>, IAsyncLifetime
 {
-    private const string Header = "Folio,Fecha,Estado,Subtotal,Impuestos,Propina,Total,Efectivo,Tarjetas";
+    private const string Header = "Folio,Fecha,Subtotal,Impuestos,Propina,Total,Efectivo,Tarjetas";
 
     // Own windows (year 2101+) and folio numbers, far from every other suite.
     private static readonly DateTimeOffset FirstWindow = new(2101, 1, 1, 0, 0, 0, TimeSpan.Zero);
@@ -36,7 +36,7 @@ public class SalesExportHttpTests(PaymentsApiFactory api) : IClassFixture<Paymen
         Assert.Equal("text/csv; charset=utf-8", response.Content.Headers.ContentType?.ToString());
         Assert.Equal("attachment", response.Content.Headers.ContentDisposition?.DispositionType);
         Assert.Contains($"reporte_ventas_{start:yyyyMMdd}_{start:yyyyMMdd}.csv", response.Content.Headers.ContentDisposition?.ToString());
-        Assert.Equal(new[] { Header, $"{folio},{start:yyyy-MM-dd}T00:00:00Z,COMPLETADO,10.00,0.00,0.00,10.00,10.00,0.00" }, Lines(body));
+        Assert.Equal(new[] { Header, $"{folio},{start:yyyy-MM-dd}T00:00:00Z,10.00,0.00,0.00,10.00,10.00,0.00" }, Lines(body));
     }
 
     [Fact]
@@ -115,7 +115,7 @@ public class SalesExportHttpTests(PaymentsApiFactory api) : IClassFixture<Paymen
         // acceptable; what must never happen is a partial line or rows from the discarded second block.
         Assert.True(received.Length == 0 || received.EndsWith("\r\n"), "The received body ends in the middle of a line.");
         Assert.Contains(lines.Length, new[] { 0, 1 + SalesExportService.FlushEvery });
-        Assert.All(lines, l => Assert.Equal(9, l.Split(',').Length));
+        Assert.All(lines, l => Assert.Equal(8, l.Split(',').Length));
     }
 
     // Reads the body chunk by chunk, keeping what arrived before the connection was cut.
@@ -142,7 +142,7 @@ public class SalesExportHttpTests(PaymentsApiFactory api) : IClassFixture<Paymen
     }
 
     private static string Url(DateTimeOffset start, DateTimeOffset end) =>
-        $"/api/v1/payments/export?inicio={start.UtcDateTime:yyyy-MM-ddTHH:mm:ssZ}&fin={end.UtcDateTime:yyyy-MM-ddTHH:mm:ssZ}";
+        $"/api/v1/payments/export?start_date={start.UtcDateTime:yyyy-MM-ddTHH:mm:ssZ}&end_date={end.UtcDateTime:yyyy-MM-ddTHH:mm:ssZ}";
 
     private static DateTimeOffset NextWindow() => FirstWindow.AddDays(100 * Interlocked.Increment(ref _windows));
 
@@ -167,6 +167,7 @@ public class SalesExportHttpTests(PaymentsApiFactory api) : IClassFixture<Paymen
                 DinningSessionId = Guid.NewGuid(),
                 CashShiftId = shift.Id,
                 CashierId = shift.CashierId,
+                TableName = "Mesa 01",
                 Subtotal = 10m,
                 Total = 10m,
                 Status = TransactionStatus.Completed,
