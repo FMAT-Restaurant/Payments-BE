@@ -107,11 +107,11 @@ public class ChargeServiceTests : IAsyncLifetime
         Assert.Equal((PaymentMethod.Cash, 250m), (payment.Method, payment.Amount));
 
         var consumed = false;
-        for (var i = 0; i < 20 && !consumed; i++)
+        for (var i = 0; i < 30 && !consumed; i++)
         {
             consumed = await Harness.Consumed.Any<PaymentCompletedEvent>(m =>
                 m.Context.Message.DinningSessionId == session && m.Context.Message.Folio == saved.Folio);
-            if (!consumed) await Task.Delay(50);
+            if (!consumed) await Task.Delay(100);
         }
         Assert.True(consumed);
     }

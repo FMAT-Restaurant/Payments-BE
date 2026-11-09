@@ -13,7 +13,10 @@ public class PendingBillService(IDistributedCache cache)
 
     public const string IndexKey = "payments:pending-bills:index";
 
-    /// <summary>Saves (or overwrites) the session snapshot. Returns false if the event was already processed or is older than the saved snapshot.</summary>
+    /// <summary>
+    /// Saves (or overwrites) the session snapshot. Returns false if the event was already processed or is older than the saved snapshot.
+    /// Updates the secondary index in Redis with the session timestamp to support high-performance polling and since filtering (PMC-27).
+    /// </summary>
     public async Task<bool> SaveSnapshotAsync(DinningSessionReadyEvent message, CancellationToken ct = default)
     {
         // Check-then-set, two concurrent deliveries of the same eventId can both write (same data, harmless).
@@ -34,7 +37,7 @@ public class PendingBillService(IDistributedCache cache)
         await cache.SetStringAsync(BillKey(message.DinningSessionId), JsonSerializer.Serialize(message), Ttl, ct);
         await cache.SetStringAsync(eventKey, "1", Ttl, ct);
 
-        await AddToActiveIndexAsync(message.DinningSessionId, ct);
+        await AddToActiveIndexAsync(message.DinningSessionId, message.Timestamp, ct);
         return true;
     }
 
@@ -52,9 +55,10 @@ public class PendingBillService(IDistributedCache cache)
     }
 
     /// <summary>
-    /// Returns all active pending bills by reading the secondary Set index without scanning keys with KEYS * (AC2).
+    /// Returns active pending bills reading the secondary index in Redis without KEYS * (AC2).
+    /// If <paramref name="since"/> is provided, only sessions created or updated on or after that timestamp are returned (PMC-27 AC3).
     /// </summary>
-    public async Task<IReadOnlyList<PendingBillResponse>> GetAllPendingAsync(CancellationToken ct = default)
+    public async Task<IReadOnlyList<PendingBillResponse>> GetAllPendingAsync(DateTimeOffset? since = null, CancellationToken ct = default)
     {
         var indexJson = await cache.GetStringAsync(IndexKey, ct);
         if (string.IsNullOrWhiteSpace(indexJson))
@@ -62,8 +66,17 @@ public class PendingBillService(IDistributedCache cache)
             return [];
         }
 
-        var set = JsonSerializer.Deserialize<HashSet<Guid>>(indexJson);
-        if (set is null || set.Count == 0)
+        var dict = DeserializeIndex(indexJson);
+        if (dict.Count == 0)
+        {
+            return [];
+        }
+
+        var targetKeys = since.HasValue
+            ? dict.Where(kvp => kvp.Value >= since.Value).Select(kvp => kvp.Key).ToList()
+            : dict.Keys.ToList();
+
+        if (targetKeys.Count == 0)
         {
             return [];
         }
@@ -71,7 +84,7 @@ public class PendingBillService(IDistributedCache cache)
         var list = new List<PendingBillResponse>();
         var expiredOrRemoved = new List<Guid>();
 
-        foreach (var id in set)
+        foreach (var id in targetKeys)
         {
             var bill = await GetAsync(id, ct);
             if (bill is not null)
@@ -89,15 +102,15 @@ public class PendingBillService(IDistributedCache cache)
         {
             foreach (var id in expiredOrRemoved)
             {
-                set.Remove(id);
+                dict.Remove(id);
             }
-            await cache.SetStringAsync(IndexKey, JsonSerializer.Serialize(set), Ttl, ct);
+            await cache.SetStringAsync(IndexKey, JsonSerializer.Serialize(dict), Ttl, ct);
         }
 
         return list.OrderByDescending(b => b.Timestamp).ToList();
     }
 
-    /// <summary>Removes the session from the cache and from the active index when paid or cancelled (AC2).</summary>
+    /// <summary>Removes the session from the cache and from the active index when paid or cancelled (PMC-28 / AC4).</summary>
     public async Task RemoveAsync(Guid dinningSessionId, CancellationToken ct = default)
     {
         await cache.RemoveAsync(BillKey(dinningSessionId), ct);
@@ -105,24 +118,46 @@ public class PendingBillService(IDistributedCache cache)
         var indexJson = await cache.GetStringAsync(IndexKey, ct);
         if (!string.IsNullOrWhiteSpace(indexJson))
         {
-            var set = JsonSerializer.Deserialize<HashSet<Guid>>(indexJson);
-            if (set is not null && set.Remove(dinningSessionId))
+            var dict = DeserializeIndex(indexJson);
+            if (dict.Remove(dinningSessionId))
             {
-                await cache.SetStringAsync(IndexKey, JsonSerializer.Serialize(set), Ttl, ct);
+                await cache.SetStringAsync(IndexKey, JsonSerializer.Serialize(dict), Ttl, ct);
             }
         }
     }
 
-    private async Task AddToActiveIndexAsync(Guid sessionId, CancellationToken ct)
+    private async Task AddToActiveIndexAsync(Guid sessionId, DateTimeOffset updatedAt, CancellationToken ct)
     {
         var indexJson = await cache.GetStringAsync(IndexKey, ct);
-        var set = !string.IsNullOrWhiteSpace(indexJson)
-            ? JsonSerializer.Deserialize<HashSet<Guid>>(indexJson) ?? []
-            : new HashSet<Guid>();
+        var dict = !string.IsNullOrWhiteSpace(indexJson)
+            ? DeserializeIndex(indexJson)
+            : [];
 
-        if (set.Add(sessionId))
+        dict[sessionId] = updatedAt;
+        await cache.SetStringAsync(IndexKey, JsonSerializer.Serialize(dict), Ttl, ct);
+    }
+
+    private static Dictionary<Guid, DateTimeOffset> DeserializeIndex(string json)
+    {
+        try
         {
-            await cache.SetStringAsync(IndexKey, JsonSerializer.Serialize(set), Ttl, ct);
+            return JsonSerializer.Deserialize<Dictionary<Guid, DateTimeOffset>>(json) ?? [];
+        }
+        catch
+        {
+            try
+            {
+                var set = JsonSerializer.Deserialize<HashSet<Guid>>(json);
+                if (set is not null)
+                {
+                    return set.ToDictionary(id => id, _ => DateTimeOffset.UtcNow);
+                }
+            }
+            catch
+            {
+            }
+
+            return [];
         }
     }
 

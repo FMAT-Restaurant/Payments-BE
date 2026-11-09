@@ -14,17 +14,21 @@ public class PendingBillsController(
 {
     /// <summary>
     /// Returns all active pending bills in the cashier inbox without querying SQL (HU-FE-02 / PMC-5).
+    /// Supports high-performance short-polling with optional ?since={timestamp} parameter (PMC-27).
     /// </summary>
     [HttpGet]
     [ProducesResponseType<IReadOnlyList<PendingBillResponse>>(StatusCodes.Status200OK)]
+    [ProducesResponseType<ErrorResponse>(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
     [ProducesResponseType<ErrorResponse>(StatusCodes.Status503ServiceUnavailable)]
-    public async Task<IActionResult> GetAll(CancellationToken ct)
+    public async Task<IActionResult> GetAll(
+        [FromQuery(Name = "since")] DateTimeOffset? since,
+        CancellationToken ct)
     {
         try
         {
-            var pendings = await bills.GetAllPendingAsync(ct);
+            var pendings = await bills.GetAllPendingAsync(since, ct);
             return Ok(pendings);
         }
         catch (Exception ex) when (IsRedisFailure(ex))

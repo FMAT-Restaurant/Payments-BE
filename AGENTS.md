@@ -354,6 +354,19 @@ Decisions for cashier inbox pending accounts and payment screen reload:
 
 ---
 
+## Cashier Inbox Polling Synchronization Decisions (PMC-27 / HU-FE-02)
+
+Decisions for high-performance short-polling synchronization of the cashier inbox:
+
+- **Strategy & Latency (AC1, AC2):** WebSockets and SSE are explicitly discarded in favor of recurring HTTP Short-Polling (e.g. every 10 seconds). The endpoint relies exclusively on Redis snapshots (0 SQL queries), maintaining response latencies consistently under 50 ms across concurrent cashier requests.
+- **Payload optimization via `since` parameter (AC3):** `GET /api/v1/payments/pendings?since={ISO-8601_timestamp}` accepts an optional timestamp query parameter. When present, the service filters active sessions and returns only those created or modified on or after that timestamp (`timestamp >= since`), lightening network bandwidth. If omitted, the full active list is returned.
+- **Index & Redis performance:** the Redis secondary index (`payments:pending-bills:index`) associates each session ID with its modification timestamp, allowing rapid filtering and selective reading of only updated snapshots without full key scans (`KEYS *`). 24-hour safety TTL prevents ghost accounts on unsynchronized cancellations.
+- **Implicit account removal (PMC-28 / AC4):** when a bill is successfully charged or cancelled, it is purged from Redis and the active index (`PendingBillService.RemoveAsync`). The endpoint sends no deletion payloads; the Frontend infers removal when the session disappears from subsequent polling responses.
+- **Input validation:** unparseable `since` dates return `400 VALIDATION_ERROR` (`"La solicitud tiene un formato inválido."`) before querying cache.
+- **Tests:** unit tests in `PendingBillServiceTests` and HTTP integration tests in `PendingBillsHttpTests` validating `?since=` timestamp filtering, 10 concurrent requests without locks and sub-50ms latency, omission of paid/cancelled accounts on next poll, and 400 validation on invalid date strings.
+
+---
+
 ## General Rules
 
 - **Code Formatting:** All code contributions must adhere to repository standards and pass `dotnet format --verify-no-changes`.

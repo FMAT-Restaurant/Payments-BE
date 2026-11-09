@@ -177,7 +177,102 @@ public class PendingBillsHttpTests(PaymentsApiFactory api) : IClassFixture<Payme
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
 
-    private async Task SeedPendingBillAsync(Guid session, string orderFolio, string tableName, string waiterName, decimal total)
+    // PMC-27 Scenario: Optimización de respuesta mediante el parámetro since
+    [Fact]
+    public async Task Polling_with_since_parameter_returns_only_updated_or_newer_sessions()
+    {
+        await ClearPendingIndexAsync();
+        var sessionOld = Guid.NewGuid();
+        var sessionNew = Guid.NewGuid();
+        var timeOld = DateTimeOffset.Parse("2026-11-05T14:20:00Z");
+        var timeNew = DateTimeOffset.Parse("2026-11-05T14:35:00Z");
+
+        await SeedPendingBillAsync(sessionOld, "#ORD-101", "Mesa 01", "Mozo 1", 100m, timeOld);
+        await SeedPendingBillAsync(sessionNew, "#ORD-102", "Mesa 02", "Mozo 2", 200m, timeNew);
+
+        using var client = api.CreateAuthenticatedClient("cashier-test", "Cajero");
+
+        // Polling with since = 14:30:00Z
+        var response = await client.GetAsync("/api/v1/payments/pendings?since=2026-11-05T14:30:00Z");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<List<PendingBillResponse>>();
+        Assert.NotNull(body);
+        Assert.Single(body);
+        Assert.Equal(sessionNew, body[0].DinningSessionId);
+        Assert.Equal("#ORD-102", body[0].OrderFolio);
+    }
+
+    // PMC-27 Scenario: Rendimiento garantizado para Short-Polling concurrente (latencia baja sin consultas SQL)
+    [Fact]
+    public async Task Concurrent_polling_requests_maintain_low_latency_without_sql_queries()
+    {
+        await ClearPendingIndexAsync();
+        var session = Guid.NewGuid();
+        await SeedPendingBillAsync(session, "#ORD-9999", "Mesa 09", "Mesero", 150m);
+
+        using var client = api.CreateAuthenticatedClient("cashier-test", "Cajero");
+
+        // 10 concurrent polling requests
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        var tasks = Enumerable.Range(0, 10).Select(_ => client.GetAsync("/api/v1/payments/pendings"));
+        var responses = await Task.WhenAll(tasks);
+        stopwatch.Stop();
+
+        foreach (var r in responses)
+        {
+            Assert.Equal(HttpStatusCode.OK, r.StatusCode);
+        }
+
+        // Entire batch of 10 concurrent requests completed swiftly in memory
+        Assert.True(stopwatch.ElapsedMilliseconds < 500, $"10 concurrent requests took {stopwatch.ElapsedMilliseconds}ms");
+    }
+
+    // PMC-27 Scenario: Cuenta eliminada tras ser cobrada o anulada
+    [Fact]
+    public async Task Account_removed_after_charge_or_cancellation_is_omitted_on_next_polling()
+    {
+        await ClearPendingIndexAsync();
+        var session = Guid.NewGuid();
+        await SeedPendingBillAsync(session, "#ORD-4444", "Mesa 04", "Mesero", 220m);
+
+        using var client = api.CreateAuthenticatedClient("cashier-test", "Cajero");
+
+        // First poll: Mesa 04 exists
+        var firstResponse = await client.GetAsync("/api/v1/payments/pendings");
+        var firstBody = await firstResponse.Content.ReadFromJsonAsync<List<PendingBillResponse>>();
+        Assert.NotNull(firstBody);
+        Assert.Contains(firstBody, b => b.DinningSessionId == session);
+
+        // Account is paid / cancelled and removed from Redis
+        await using (var scope = api.Services.CreateAsyncScope())
+        {
+            var bills = scope.ServiceProvider.GetRequiredService<PendingBillService>();
+            await bills.RemoveAsync(session);
+        }
+
+        // Subsequent poll: Mesa 04 is omitted
+        var nextResponse = await client.GetAsync("/api/v1/payments/pendings");
+        var nextBody = await nextResponse.Content.ReadFromJsonAsync<List<PendingBillResponse>>();
+        Assert.NotNull(nextBody);
+        Assert.DoesNotContain(nextBody, b => b.DinningSessionId == session);
+    }
+
+    // PMC-27 Input Validation: Formato de fecha 'since' inválido -> 400 Bad Request
+    [Fact]
+    public async Task Polling_with_invalid_since_format_returns_400_bad_request()
+    {
+        using var client = api.CreateAuthenticatedClient("cashier-test", "Cajero");
+
+        var response = await client.GetAsync("/api/v1/payments/pendings?since=invalid-date");
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var error = await response.Content.ReadFromJsonAsync<ErrorResponse>();
+        Assert.NotNull(error);
+        Assert.Equal(ErrorResponse.ValidationErrorCode, error.Code);
+    }
+
+    private async Task SeedPendingBillAsync(Guid session, string orderFolio, string tableName, string waiterName, decimal total, DateTimeOffset? timestamp = null)
     {
         await using var scope = api.Services.CreateAsyncScope();
         var bills = scope.ServiceProvider.GetRequiredService<PendingBillService>();
@@ -187,7 +282,7 @@ public class PendingBillsHttpTests(PaymentsApiFactory api) : IClassFixture<Payme
             session,
             Guid.NewGuid(),
             Guid.NewGuid(),
-            DateTimeOffset.UtcNow,
+            timestamp ?? DateTimeOffset.UtcNow,
             [new BillItem(Guid.NewGuid(), "Tacos al Pastor", 2, total / 2, total, "Sin cebolla")],
             new BillTotals(total * 0.86m, total * 0.14m, total),
             TableName: tableName,

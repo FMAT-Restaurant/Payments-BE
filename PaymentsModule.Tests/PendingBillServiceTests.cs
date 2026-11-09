@@ -134,6 +134,42 @@ public class PendingBillServiceTests
         Assert.Equal(100m, current.Total);
     }
 
+    [Fact]
+    public async Task GetAllPendingAsync_with_since_parameter_filters_sessions_by_timestamp()
+    {
+        var session1 = Guid.NewGuid();
+        var session2 = Guid.NewGuid();
+        var time1 = DateTimeOffset.Parse("2026-11-05T14:20:00Z");
+        var time2 = DateTimeOffset.Parse("2026-11-05T14:35:00Z");
+        var cutoff = DateTimeOffset.Parse("2026-11-05T14:30:00Z");
+
+        var bill1 = new DinningSessionReadyEvent(
+            Guid.NewGuid(), session1, Guid.NewGuid(), Guid.NewGuid(), time1,
+            [new BillItem(Guid.NewGuid(), "Platillo 1", 1, 100m, 100m)],
+            new BillTotals(86.21m, 13.79m, 100m), "Mesa 1", "#ORD-1", "Mozo");
+
+        var bill2 = new DinningSessionReadyEvent(
+            Guid.NewGuid(), session2, Guid.NewGuid(), Guid.NewGuid(), time2,
+            [new BillItem(Guid.NewGuid(), "Platillo 2", 1, 200m, 200m)],
+            new BillTotals(172.41m, 27.59m, 200m), "Mesa 2", "#ORD-2", "Mozo");
+
+        await _service.SaveSnapshotAsync(bill1);
+        await _service.SaveSnapshotAsync(bill2);
+
+        // Filter with since = 14:30:00Z -> only bill2 from 14:35:00Z is returned
+        var filtered = await _service.GetAllPendingAsync(cutoff);
+        Assert.Single(filtered);
+        Assert.Equal(session2, filtered[0].DinningSessionId);
+
+        // Query with since beyond all bills -> empty list
+        var none = await _service.GetAllPendingAsync(time2.AddMinutes(5));
+        Assert.Empty(none);
+
+        // Query without since -> returns both bills
+        var all = await _service.GetAllPendingAsync();
+        Assert.Equal(2, all.Count);
+    }
+
     private static DinningSessionReadyEvent CreateEvent(Guid session, string orderFolio, string tableName, string waiterName, decimal total) =>
         new(
             Guid.NewGuid(),
