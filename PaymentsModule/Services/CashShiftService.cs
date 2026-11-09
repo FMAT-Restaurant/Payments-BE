@@ -314,6 +314,8 @@ public class CashShiftService(PaymentsDbContext db)
     /// <summary>One server-side aggregation over the shift's completed payments: no transaction is loaded into memory.</summary>
     private async Task<ShiftTotals> CalculateShiftTotalsAsync(Guid shiftId, CancellationToken ct)
     {
+        await db.Database.ExecuteSqlRawAsync("SET TRANSACTION ISOLATION LEVEL READ COMMITTED;", ct);
+
         var totals = await db.Transactions.AsNoTracking()
             .Where(t => t.CashShiftId == shiftId && t.Status == TransactionStatus.Completed)
             .SelectMany(t => t.Payments.Select(p => new { p.Method, p.Amount, t.Tip, t.Total }))
