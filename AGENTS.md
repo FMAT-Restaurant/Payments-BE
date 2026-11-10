@@ -124,7 +124,7 @@ Agreed while implementing PMC-6. Several items are pending confirmation with the
 - **Folio:** `TX-{yyyyMMdd}-{number:D6}` where the number restarts every UTC day. It comes from the `FolioCounters` table (one row per day) through `ChargeService.NextDailyNumberAsync`: a `MERGE ... WITH (HOLDLOCK)` with `OUTPUT` inside the charge transaction, so concurrent charges never share a number and a rolled-back charge gives its number back. The global sequence `transaction_number_seq` still feeds `Number` (ordering). The migration seeds each day's counter with the highest number already used that day, so old folios are never repeated.
 - **Identity:** JWT Bearer configured in `Authentication:Schemes:Bearer`; the cashier is the `NameIdentifier` (`sub`) claim, never the payload.
 - **Cash shift:** `CashShift` has the shape required by PMC-8 (open/close endpoints belong to PMC-8). Charging requires an `Open` shift of the cashier (`403 CASH_SHIFT_NOT_OPEN` otherwise).
-- **Tests:** `ChargeServiceTests` run against a real SQL Server (`payments_tests` database; override with `ConnectionStrings__SqlServer`). CI uses a SQL Server service container.
+- **Tests:** `ChargeServiceTests` run against a real SQL Server (`payments_tests` database; the server comes from the required `ConnectionStrings__SqlServer` env var, so no password is committed). CI uses a SQL Server service container.
 
 ---
 

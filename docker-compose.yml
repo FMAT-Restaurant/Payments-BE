@@ -8,7 +8,7 @@ services:
     container_name: payments-sqlserver
     environment:
       ACCEPT_EULA: "Y"
-      MSSQL_SA_PASSWORD: "Payments_Dev_2026!" # local development only
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:?Define MSSQL_SA_PASSWORD in .env (see README)}
     ports:
       - "14330:1433" # avoids clashing with a native SQL Server install
     volumes:
@@ -30,6 +30,43 @@ services:
     ports:
       - "5672:5672"
       - "15672:15672"
+
+  # Opt-in (`docker compose --profile api up -d --build`) so it never competes for RabbitMQ
+  # messages with a `dotnet run` instance during day-to-day development.
+  api:
+    profiles: ["api"]
+    build: .
+    image: payments-be:local
+    container_name: payments-api
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      rabbitmq:
+        condition: service_started
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development # enables Swagger at /swagger
+      ASPNETCORE_HTTP_PORTS: "8084" # the API Gateway routes to http://payments-backend:8084
+      Database__MigrateOnStartup: "true"
+      ConnectionStrings__SqlServer: "Server=sqlserver,1433;Database=payments;User Id=sa;Password=${MSSQL_SA_PASSWORD};TrustServerCertificate=True"
+      ConnectionStrings__Redis: "redis:6379"
+      ConnectionStrings__RabbitMq: "amqp://guest:guest@rabbitmq:5672"
+      # Same HS256 secret and issuer as Auth-Backend and the API Gateway (JWT_SECRET in .env).
+      Authentication__Schemes__Bearer__Secret: ${JWT_SECRET:-}
+      Authentication__Schemes__Bearer__ValidIssuer: "urn:fmat:restaurant:auth"
+    ports:
+      - "5150:8084"
+    networks:
+      default:
+      restaurant-network:
+        aliases:
+          - payments-backend
+
+networks:
+  # Created by the API-Gateway compose; start the gateway first (or `docker network create restaurant-network`).
+  restaurant-network:
+    external: true
 
 volumes:
   sqlserver-data:

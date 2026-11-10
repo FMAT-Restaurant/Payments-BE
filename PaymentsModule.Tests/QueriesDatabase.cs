@@ -14,12 +14,7 @@ public static class QueriesDatabase
 {
     public const string CollectionName = "queries-database";
 
-    private static readonly string ConnectionString = new SqlConnectionStringBuilder(
-        Environment.GetEnvironmentVariable("ConnectionStrings__SqlServer")
-        ?? "Server=localhost,14330;Database=payments_tests;User Id=sa;Password=Payments_Dev_2026!;TrustServerCertificate=True")
-    {
-        InitialCatalog = "payments_tests_queries"
-    }.ConnectionString;
+    private static readonly string ConnectionString = TestDatabase.ConnectionString("payments_tests_queries");
 
     private static long _number;
 
