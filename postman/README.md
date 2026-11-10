@@ -49,6 +49,17 @@ El servicio estará disponible en:
 
 ---
 
+### D. Sembrar una Cuenta Pendiente vía RabbitMQ (Simular a Órdenes)
+Para probar el subscriber de RabbitMQ (`DinningSessionReadyConsumer`), Redis y los cobros reales (`201 Created`), ejecuta el script incluido:
+
+```bash
+./postman/seed-pending-bills.sh
+```
+
+Esto publica un evento `DinningSessionReadyEvent` real al exchange `DinningSessionReady` de RabbitMQ (`http://localhost:15672`). El microservicio lo consume automáticamente, lo guarda en Redis y queda visible en `GET /api/v1/payments/pendings`.
+
+---
+
 ## 2. Tokens JWT de Autenticación
 
 El microservicio extrae la identidad del cajero/usuario exclusivamente desde los claims del JWT (`sub` / `NameIdentifier`):

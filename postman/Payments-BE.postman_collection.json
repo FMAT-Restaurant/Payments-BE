@@ -330,7 +330,100 @@
       "name": "03. Procesamiento de Cobros (Charges)",
       "item": [
         {
-          "name": "1. Cobro Exitoso con Efectivo y Cambio (POST /charge)",
+          "name": "1. Error: Tarjeta sin Referencia de Autorización (422)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dinning_session_id\": \"{{dinningSessionId}}\",\n  \"tip\": 0,\n  \"payments\": [\n    {\n      \"method\": \"TARJETA_DEBITO\",\n      \"amount\": 100.00,\n      \"authorization_reference\": null\n    }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/payments/charge",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "payments", "charge"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 422) {",
+                  "    pm.test(\"Rechazado: autorización requerida (422)\", function () {",
+                  "        const json = pm.response.json();",
+                  "        pm.expect(json.code).to.eql(\"AUTHORIZATION_REFERENCE_REQUIRED\");",
+                  "        pm.expect(json.message).to.include(\"referencia de autorización es obligatoria\");",
+                  "    });",
+                  "} else if (pm.response.code === 404) {",
+                  "    pm.test(\"Cuenta no encontrada en Redis (404 BILL_NOT_FOUND)\", function () {",
+                  "        pm.expect(pm.response.json().code).to.eql(\"BILL_NOT_FOUND\");",
+                  "    });",
+                  "} else if (pm.response.code === 409) {",
+                  "    pm.test(\"Sesión ya pagada previamente (409 TRANSACTION_ALREADY_PAID)\", function () {",
+                  "        pm.expect(pm.response.json().code).to.eql(\"TRANSACTION_ALREADY_PAID\");",
+                  "    });",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "2. Error: Fondos Insuficientes con Deficit (422)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dinning_session_id\": \"{{dinningSessionId}}\",\n  \"tip\": 0,\n  \"payments\": [\n    {\n      \"method\": \"EFECTIVO\",\n      \"amount\": 1.00,\n      \"authorization_reference\": null\n    }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/payments/charge",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "payments", "charge"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 422) {",
+                  "    pm.test(\"Rechazado: monto no cubre el total (422 INSUFFICIENT_FUNDS)\", function () {",
+                  "        const json = pm.response.json();",
+                  "        if (json.code === \"INSUFFICIENT_FUNDS\") {",
+                  "            pm.expect(json.deficit).to.be.above(0);",
+                  "        }",
+                  "    });",
+                  "} else if (pm.response.code === 404) {",
+                  "    pm.test(\"Cuenta no encontrada en Redis (404 BILL_NOT_FOUND)\", function () {",
+                  "        pm.expect(pm.response.json().code).to.eql(\"BILL_NOT_FOUND\");",
+                  "    });",
+                  "} else if (pm.response.code === 409) {",
+                  "    pm.test(\"Sesión ya pagada previamente (409 TRANSACTION_ALREADY_PAID)\", function () {",
+                  "        pm.expect(pm.response.json().code).to.eql(\"TRANSACTION_ALREADY_PAID\");",
+                  "    });",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "3. Cobro Exitoso con Efectivo y Cambio (POST /charge)",
           "request": {
             "method": "POST",
             "header": [
@@ -383,7 +476,7 @@
           ]
         },
         {
-          "name": "2. Cobro Mixto (Tarjeta + Efectivo)",
+          "name": "4. Cobro Mixto / Idempotencia (POST /charge)",
           "request": {
             "method": "POST",
             "header": [
@@ -407,94 +500,9 @@
               "listen": "test",
               "script": {
                 "exec": [
-                  "pm.test(\"Estatus válido de cobro (201, 404, 403, 409 o 422)\", function () {",
+                  "pm.test(\"Estatus válido de cobro / idempotencia (201, 409, 404, 403 o 422)\", function () {",
                   "    pm.expect(pm.response.code).to.be.oneOf([201, 403, 404, 409, 422]);",
                   "});"
-                ],
-                "type": "text/javascript"
-              }
-            }
-          ]
-        },
-        {
-          "name": "3. Error: Tarjeta sin Referencia de Autorización (422)",
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"dinning_session_id\": \"{{dinningSessionId}}\",\n  \"tip\": 0,\n  \"payments\": [\n    {\n      \"method\": \"TARJETA_DEBITO\",\n      \"amount\": 100.00,\n      \"authorization_reference\": null\n    }\n  ]\n}"
-            },
-            "url": {
-              "raw": "{{baseUrl}}/api/v1/payments/charge",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "payments", "charge"]
-            }
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "exec": [
-                  "if (pm.response.code === 422) {",
-                  "    pm.test(\"Rechazado: autorización requerida (422)\", function () {",
-                  "        const json = pm.response.json();",
-                  "        pm.expect(json.code).to.eql(\"AUTHORIZATION_REFERENCE_REQUIRED\");",
-                  "        pm.expect(json.message).to.include(\"referencia de autorización es obligatoria\");",
-                  "    });",
-                  "} else if (pm.response.code === 404) {",
-                  "    pm.test(\"Cuenta no encontrada en Redis (404 BILL_NOT_FOUND)\", function () {",
-                  "        pm.expect(pm.response.json().code).to.eql(\"BILL_NOT_FOUND\");",
-                  "    });",
-                  "}"
-                ],
-                "type": "text/javascript"
-              }
-            }
-          ]
-        },
-        {
-          "name": "4. Error: Fondos Insuficientes con Deficit (422)",
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"dinning_session_id\": \"{{dinningSessionId}}\",\n  \"tip\": 0,\n  \"payments\": [\n    {\n      \"method\": \"EFECTIVO\",\n      \"amount\": 1.00,\n      \"authorization_reference\": null\n    }\n  ]\n}"
-            },
-            "url": {
-              "raw": "{{baseUrl}}/api/v1/payments/charge",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "payments", "charge"]
-            }
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "exec": [
-                  "if (pm.response.code === 422) {",
-                  "    pm.test(\"Rechazado: monto no cubre el total (422 INSUFFICIENT_FUNDS)\", function () {",
-                  "        const json = pm.response.json();",
-                  "        if (json.code === \"INSUFFICIENT_FUNDS\") {",
-                  "            pm.expect(json.deficit).to.be.above(0);",
-                  "        }",
-                  "    });",
-                  "} else if (pm.response.code === 404) {",
-                  "    pm.test(\"Cuenta no encontrada en Redis (404 BILL_NOT_FOUND)\", function () {",
-                  "        pm.expect(pm.response.json().code).to.eql(\"BILL_NOT_FOUND\");",
-                  "    });",
-                  "}"
                 ],
                 "type": "text/javascript"
               }
