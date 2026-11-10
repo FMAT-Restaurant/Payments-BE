@@ -106,6 +106,13 @@ if (!string.IsNullOrWhiteSpace(builder.Configuration["OTEL_EXPORTER_OTLP_ENDPOIN
 
 var app = builder.Build();
 
+// Only the local container (docker-compose `api` profile) migrates on startup; other environments migrate explicitly.
+if (app.Configuration.GetValue<bool>("Database:MigrateOnStartup"))
+{
+    using var scope = app.Services.CreateScope();
+    await scope.ServiceProvider.GetRequiredService<PaymentsDbContext>().Database.MigrateAsync();
+}
+
 // Unhandled errors (e.g. database failures after rollback) become a generic 500 without internals.
 app.UseExceptionHandler(handler => handler.Run(context =>
     context.Response.WriteAsJsonAsync(

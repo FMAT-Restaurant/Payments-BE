@@ -31,5 +31,30 @@ services:
       - "5672:5672"
       - "15672:15672"
 
+  # Opt-in (`docker compose --profile api up -d --build`) so it never competes for RabbitMQ
+  # messages with a `dotnet run` instance during day-to-day development.
+  api:
+    profiles: ["api"]
+    build: .
+    image: payments-be:local
+    container_name: payments-api
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      rabbitmq:
+        condition: service_started
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development # enables Swagger at /swagger
+      Database__MigrateOnStartup: "true"
+      ConnectionStrings__SqlServer: "Server=sqlserver,1433;Database=payments;User Id=sa;Password=Payments_Dev_2026!;TrustServerCertificate=True"
+      ConnectionStrings__Redis: "redis:6379"
+      ConnectionStrings__RabbitMq: "amqp://guest:guest@rabbitmq:5672"
+      # JWT issuer (API Gateway / Auth). Any Authentication__Schemes__Bearer__* key can be added the same way.
+      Authentication__Schemes__Bearer__Authority: ${JWT_AUTHORITY:-}
+    ports:
+      - "5150:8080"
+
 volumes:
   sqlserver-data:

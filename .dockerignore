@@ -1,0 +1,10 @@
+**/bin/
+**/obj/
+**/TestResults/
+.git/
+.github/
+.agents/
+.vs/
+.vscode/
+.idea/
+PaymentsModule.Tests/
