@@ -1,11 +1,13 @@
 using System.Globalization;
 using System.Reflection;
+using System.Text;
 using System.Text.Json.Serialization;
 using FluentValidation;
 using MassTransit;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.IdentityModel.Tokens;
 using OpenTelemetry;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Trace;
@@ -34,7 +36,17 @@ ValidatorOptions.Global.DisplayNameResolver = (_, member, _) =>
     member?.GetCustomAttribute<JsonPropertyNameAttribute>()?.Name;
 
 // JWT forwarded by the API Gateway. Authority/audience come from Authentication:Schemes:Bearer in configuration.
-builder.Services.AddAuthentication().AddJwtBearer();
+builder.Services.AddAuthentication().AddJwtBearer(options =>
+{
+    // Auth and Kong sign HS256 with the literal shared JWT_SECRET (no base64) and issue no `aud`,
+    // per the API-Gateway contract.
+    var secret = builder.Configuration["Authentication:Schemes:Bearer:Secret"];
+    if (!string.IsNullOrEmpty(secret))
+    {
+        options.TokenValidationParameters.IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secret));
+        options.TokenValidationParameters.ValidateAudience = false;
+    }
+});
 builder.Services.AddAuthorization();
 builder.Services.AddSingleton<IAuthorizationMiddlewareResultHandler, PaymentsModule.Infrastructure.CustomAuthorizationMiddlewareResultHandler>();
 
@@ -105,6 +117,13 @@ if (!string.IsNullOrWhiteSpace(builder.Configuration["OTEL_EXPORTER_OTLP_ENDPOIN
 }
 
 var app = builder.Build();
+
+// Only the local container (docker-compose `api` profile) migrates on startup; other environments migrate explicitly.
+if (app.Configuration.GetValue<bool>("Database:MigrateOnStartup"))
+{
+    using var scope = app.Services.CreateScope();
+    await scope.ServiceProvider.GetRequiredService<PaymentsDbContext>().Database.MigrateAsync();
+}
 
 // Unhandled errors (e.g. database failures after rollback) become a generic 500 without internals.
 app.UseExceptionHandler(handler => handler.Run(context =>

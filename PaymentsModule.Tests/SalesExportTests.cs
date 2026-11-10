@@ -29,9 +29,7 @@ public class SalesExportCollection
 [Collection(nameof(SalesExportTests))]
 public class SalesExportTests : IAsyncLifetime
 {
-    private static readonly string ConnectionString =
-        Environment.GetEnvironmentVariable("ConnectionStrings__SqlServer")
-        ?? "Server=localhost,14330;Database=payments_tests;User Id=sa;Password=Payments_Dev_2026!;TrustServerCertificate=True";
+    private static readonly string ConnectionString = TestDatabase.ConnectionString();
 
     private static readonly DateTimeOffset FirstWindow = new(2001, 1, 1, 0, 0, 0, TimeSpan.Zero);
     private static int _windows;
