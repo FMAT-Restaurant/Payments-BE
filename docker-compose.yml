@@ -64,7 +64,7 @@ services:
           - payments-backend
 
 networks:
-  # Created by the API-Gateway compose; start the gateway first (or `docker network create restaurant-network`).
+  # Created by the API-Gateway compose: start the gateway first (a hand-made network makes its compose fail).
   restaurant-network:
     external: true
 

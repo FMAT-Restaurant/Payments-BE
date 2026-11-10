@@ -23,7 +23,7 @@ docker compose --profile api up -d --build   # API + SQL Server + Redis + Rabbit
 ```
 
 - API: `http://localhost:5150` (Swagger at `/swagger`, health at `/health`). Migrations run on startup.
-- Requires the `restaurant-network` network created by [API-Gateway](https://github.com/FMAT-Restaurant/API-Gateway) (start it first, or `docker network create restaurant-network`). The gateway reaches this API as `http://payments-backend:8084`.
+- Requires the `restaurant-network` network created by [API-Gateway](https://github.com/FMAT-Restaurant/API-Gateway) (start the gateway first; do not create the network by hand or the gateway compose refuses it). The gateway reaches this API as `http://payments-backend:8084`.
 - JWT: set `JWT_SECRET` (env var or `.env`) to the same HS256 secret used by Auth-Backend and the gateway; without it every protected endpoint answers `401`.
 - Pending bills arrive only through `DinningSessionReadyEvent` on RabbitMQ (management UI at `http://localhost:15672`, `guest`/`guest`).
 - Infra only (for `dotnet run`): `docker compose up -d`.
