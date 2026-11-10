@@ -209,8 +209,20 @@ namespace PaymentsModule.Data.Migrations
                         .HasMaxLength(128)
                         .HasColumnType("nvarchar(128)");
 
+                    b.Property<string>("CashierName")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("CloseReason")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
                     b.Property<DateTimeOffset?>("ClosedAt")
                         .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("ClosedByAdminId")
+                        .HasMaxLength(128)
+                        .HasColumnType("nvarchar(128)");
 
                     b.Property<decimal?>("DeclaredCash")
                         .HasPrecision(18, 2)
@@ -223,6 +235,10 @@ namespace PaymentsModule.Data.Migrations
                     b.Property<decimal?>("ExpectedCash")
                         .HasPrecision(18, 2)
                         .HasColumnType("decimal(18,2)");
+
+                    b.Property<string>("ForceCloseReason")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
 
                     b.Property<decimal>("InitialFund")
                         .HasPrecision(18, 2)
@@ -253,6 +269,19 @@ namespace PaymentsModule.Data.Migrations
                         .HasFilter("[Status] = 'Open'");
 
                     b.ToTable("CashShifts");
+                });
+
+            modelBuilder.Entity("PaymentsModule.Models.FolioCounter", b =>
+                {
+                    b.Property<DateOnly>("Day")
+                        .HasColumnType("date");
+
+                    b.Property<int>("LastNumber")
+                        .HasColumnType("int");
+
+                    b.HasKey("Day");
+
+                    b.ToTable("FolioCounters");
                 });
 
             modelBuilder.Entity("PaymentsModule.Models.PaymentBreakdown", b =>
@@ -298,6 +327,10 @@ namespace PaymentsModule.Data.Migrations
                         .HasMaxLength(128)
                         .HasColumnType("nvarchar(128)");
 
+                    b.Property<decimal>("ChangeGiven")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("datetimeoffset");
 
@@ -320,6 +353,10 @@ namespace PaymentsModule.Data.Migrations
                     b.Property<decimal>("Subtotal")
                         .HasPrecision(18, 2)
                         .HasColumnType("decimal(18,2)");
+
+                    b.Property<string>("TableName")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
 
                     b.Property<decimal>("Taxes")
                         .HasPrecision(18, 2)
@@ -345,6 +382,8 @@ namespace PaymentsModule.Data.Migrations
 
                     b.HasIndex("Number")
                         .IsUnique();
+
+                    b.HasIndex("CreatedAt", "Number");
 
                     b.ToTable("Transactions");
                 });

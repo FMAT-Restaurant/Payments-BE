@@ -1,3 +1,4 @@
+using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using PaymentsModule.Data;
 using PaymentsModule.Models;
@@ -13,10 +14,12 @@ public static class QueriesDatabase
 {
     public const string CollectionName = "queries-database";
 
-    private static readonly string ConnectionString =
-        (Environment.GetEnvironmentVariable("ConnectionStrings__SqlServer")
+    private static readonly string ConnectionString = new SqlConnectionStringBuilder(
+        Environment.GetEnvironmentVariable("ConnectionStrings__SqlServer")
         ?? "Server=localhost,14330;Database=payments_tests;User Id=sa;Password=Payments_Dev_2026!;TrustServerCertificate=True")
-        .Replace("Database=payments_tests;", "Database=payments_tests_queries;", StringComparison.Ordinal);
+    {
+        InitialCatalog = "payments_tests_queries"
+    }.ConnectionString;
 
     private static long _number;
 
@@ -60,6 +63,7 @@ public static class QueriesDatabase
             CashierId = shift.CashierId,
             Subtotal = total,
             Total = total,
+            ChangeGiven = 0m,
             Status = status,
             CreatedAt = createdAt,
             Items = [new TransactionItem { DishName = "Ribeye", Quantity = 1, UnitPrice = total, Amount = total }],

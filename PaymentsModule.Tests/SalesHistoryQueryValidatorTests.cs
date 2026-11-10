@@ -16,34 +16,44 @@ public class SalesHistoryQueryValidatorTests
     }
 
     [Fact]
-    public void Accepts_every_filter_together()
+    public void Accepts_valid_date_range_where_start_is_before_end()
     {
         var query = new SalesHistoryQuery
         {
-            From = DateTimeOffset.Parse("2026-09-01T00:00:00Z"),
-            To = DateTimeOffset.Parse("2026-09-30T23:59:59Z"),
-            Status = "COMPLETADO",
-            Method = "TARJETA_CREDITO",
+            StartDate = DateTimeOffset.Parse("2026-09-01T00:00:00Z"),
+            EndDate = DateTimeOffset.Parse("2026-09-30T23:59:59Z"),
             PageIndex = 1,
             PageSize = 50
         };
 
         Assert.True(_validator.Validate(query).IsValid);
-        Assert.Equal((TransactionStatus.Completed, PaymentMethod.CreditCard), (query.ToFilter().Status, query.ToFilter().Method));
+        Assert.Equal(DateTimeOffset.Parse("2026-09-01T00:00:00Z"), query.ToFilter().StartDate);
+        Assert.Equal(DateTimeOffset.Parse("2026-09-30T23:59:59Z"), query.ToFilter().EndDate);
     }
 
     [Fact]
-    public void Rejects_a_start_date_after_the_end_date()
+    public void Rejects_a_start_date_equal_to_or_after_end_date()
     {
-        var query = new SalesHistoryQuery
+        var equalDatesQuery = new SalesHistoryQuery
         {
-            From = DateTimeOffset.Parse("2026-10-01T00:00:00Z"),
-            To = DateTimeOffset.Parse("2026-09-01T00:00:00Z")
+            StartDate = DateTimeOffset.Parse("2026-09-01T00:00:00Z"),
+            EndDate = DateTimeOffset.Parse("2026-09-01T00:00:00Z")
         };
 
-        var result = _validator.Validate(query);
+        var greaterDateQuery = new SalesHistoryQuery
+        {
+            StartDate = DateTimeOffset.Parse("2026-10-01T00:00:00Z"),
+            EndDate = DateTimeOffset.Parse("2026-09-01T00:00:00Z")
+        };
 
-        Assert.Contains(result.Errors, e => e.ErrorMessage.Contains("date range is invalid"));
+        var resultEqual = _validator.Validate(equalDatesQuery);
+        var resultGreater = _validator.Validate(greaterDateQuery);
+
+        Assert.False(resultEqual.IsValid);
+        Assert.Contains(resultEqual.Errors, e => e.ErrorMessage.Contains("La fecha de inicio debe ser anterior a la fecha de fin"));
+
+        Assert.False(resultGreater.IsValid);
+        Assert.Contains(resultGreater.Errors, e => e.ErrorMessage.Contains("La fecha de inicio debe ser anterior a la fecha de fin"));
     }
 
     [Theory]
@@ -53,26 +63,4 @@ public class SalesHistoryQueryValidatorTests
     [InlineData(1, 51)]
     public void Rejects_paging_out_of_range(int pageIndex, int pageSize) =>
         Assert.False(_validator.Validate(new SalesHistoryQuery { PageIndex = pageIndex, PageSize = pageSize }).IsValid);
-
-    [Theory]
-    [InlineData("PENDIENTE")]
-    [InlineData("")]
-    public void Rejects_unknown_status(string status) =>
-        Assert.False(_validator.Validate(new SalesHistoryQuery { Status = status }).IsValid);
-
-    [Theory]
-    [InlineData("CARD")]
-    [InlineData("EFECTIVO_Y_TARJETA")]
-    public void Rejects_unknown_payment_method(string method) =>
-        Assert.False(_validator.Validate(new SalesHistoryQuery { Method = method }).IsValid);
-
-    [Fact]
-    public void Parses_wire_names_of_the_enums()
-    {
-        Assert.True(WireEnum.TryParse<TransactionStatus>("CANCELADO", out var status));
-        Assert.Equal(TransactionStatus.Cancelled, status);
-        Assert.True(WireEnum.TryParse<PaymentMethod>("TARJETA_DEBITO", out var method));
-        Assert.Equal(PaymentMethod.DebitCard, method);
-        Assert.False(WireEnum.TryParse<PaymentMethod>(null, out _));
-    }
 }

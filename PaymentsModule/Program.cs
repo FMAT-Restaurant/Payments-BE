@@ -1,5 +1,10 @@
+using System.Globalization;
+using System.Reflection;
+using System.Text.Json.Serialization;
 using FluentValidation;
 using MassTransit;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using OpenTelemetry;
 using OpenTelemetry.Metrics;
@@ -8,6 +13,7 @@ using PaymentsModule.Consumers;
 using PaymentsModule.Data;
 using PaymentsModule.Models;
 using PaymentsModule.Services;
+using StackExchange.Redis;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -18,25 +24,42 @@ builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
 builder.Services.AddHealthChecks();
-builder.Services.AddControllers();
-builder.Services.AddProblemDetails();
+// Error contract of every endpoint: { "code", "message" } with the message in Spanish (PMC-6, 05/11/2026).
+builder.Services.AddControllers().ConfigureApiBehaviorOptions(options =>
+    options.InvalidModelStateResponseFactory = _ => new BadRequestObjectResult(
+        new ErrorResponse(ErrorResponse.ValidationErrorCode, "La solicitud tiene un formato inválido.")));
+ValidatorOptions.Global.LanguageManager.Culture = new CultureInfo("es");
+// Built-in messages name the wire field (e.g. 'fondo_inicial') instead of the C# property.
+ValidatorOptions.Global.DisplayNameResolver = (_, member, _) =>
+    member?.GetCustomAttribute<JsonPropertyNameAttribute>()?.Name;
 
 // JWT forwarded by the API Gateway. Authority/audience come from Authentication:Schemes:Bearer in configuration.
 builder.Services.AddAuthentication().AddJwtBearer();
 builder.Services.AddAuthorization();
+builder.Services.AddSingleton<IAuthorizationMiddlewareResultHandler, PaymentsModule.Infrastructure.CustomAuthorizationMiddlewareResultHandler>();
 
 builder.Services.AddStackExchangeRedisCache(options =>
     options.Configuration = builder.Configuration.GetConnectionString("Redis"));
 builder.Services.AddScoped<IValidator<DinningSessionReadyEvent>, DinningSessionReadyEventValidator>();
+builder.Services.AddScoped<IValidator<DinningSessionCancelledEvent>, DinningSessionCancelledEventValidator>();
+// Created on first use, so test hosts that replace the index never open a Redis connection.
+builder.Services.AddSingleton<IConnectionMultiplexer>(_ =>
+    ConnectionMultiplexer.Connect(builder.Configuration.GetConnectionString("Redis")!));
+builder.Services.AddSingleton<IPendingSessionIndex, RedisPendingSessionIndex>();
 builder.Services.AddScoped<PendingBillService>();
 builder.Services.AddScoped<IValidator<ChargeRequest>, ChargeRequestValidator>();
 builder.Services.AddScoped<ChargeService>();
+builder.Services.AddSingleton<IChargeCalculationService, ChargeCalculationService>();
 builder.Services.AddScoped<IValidator<OpenCashShiftRequest>, OpenCashShiftRequestValidator>();
 builder.Services.AddScoped<IValidator<CloseCashShiftRequest>, CloseCashShiftRequestValidator>();
+builder.Services.AddScoped<IValidator<ForceCloseCashShiftRequest>, ForceCloseCashShiftRequestValidator>();
 builder.Services.AddScoped<CashShiftService>();
 builder.Services.AddScoped<TransactionDetailService>();
 builder.Services.AddScoped<IValidator<SalesHistoryQuery>, SalesHistoryQueryValidator>();
 builder.Services.AddScoped<SalesHistoryService>();
+builder.Services.AddScoped<PrintTicketService>();
+builder.Services.AddScoped<IValidator<SalesExportQuery>, SalesExportQueryValidator>();
+builder.Services.AddScoped<SalesExportService>();
 
 builder.Services.AddDbContext<PaymentsDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("SqlServer")));
@@ -44,6 +67,7 @@ builder.Services.AddDbContext<PaymentsDbContext>(options =>
 builder.Services.AddMassTransit(x =>
 {
     x.AddConsumer<DinningSessionReadyConsumer, DinningSessionReadyConsumerDefinition>();
+    x.AddConsumer<DinningSessionCancelledConsumer, DinningSessionCancelledConsumerDefinition>();
     // Bus outbox: events published from services are stored with the DbContext and only sent after COMMIT.
     x.AddEntityFrameworkOutbox<PaymentsDbContext>(o =>
     {
@@ -82,8 +106,10 @@ if (!string.IsNullOrWhiteSpace(builder.Configuration["OTEL_EXPORTER_OTLP_ENDPOIN
 
 var app = builder.Build();
 
-// Unhandled errors (e.g. database failures after rollback) become a 500 ProblemDetails without internals.
-app.UseExceptionHandler();
+// Unhandled errors (e.g. database failures after rollback) become a generic 500 without internals.
+app.UseExceptionHandler(handler => handler.Run(context =>
+    context.Response.WriteAsJsonAsync(
+        new ErrorResponse("INTERNAL_ERROR", "Ocurrió un error interno. Intente de nuevo más tarde."))));
 
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
@@ -93,7 +119,6 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
-app.UseHttpsRedirection();
 app.UseAuthentication();
 app.UseAuthorization();
 
@@ -102,3 +127,6 @@ app.MapControllers();
 app.MapHealthChecks("/health");
 
 app.Run();
+
+// Lets the HTTP integration tests boot this app with WebApplicationFactory<Program>.
+public partial class Program;

@@ -2,27 +2,21 @@ using System.Text.Json.Serialization;
 
 namespace PaymentsModule.Models;
 
-// Wire contract with the frontend / API Gateway keeps the Spanish snake_case names from PMC-6.
+// Wire contract of PMC-6/PMC-7 (05/11/2026): English snake_case. Items are not sent: the bill comes from Redis (PMC-5).
 public record ChargeRequest(
     [property: JsonPropertyName("dinning_session_id")] Guid DinningSessionId,
-    [property: JsonPropertyName("propina")] decimal Tip,
-    [property: JsonPropertyName("pagos")] IReadOnlyList<PaymentRequest> Payments,
-    [property: JsonPropertyName("detalles_snapshot")] IReadOnlyList<ItemSnapshot> ItemsSnapshot);
+    [property: JsonPropertyName("tip")] decimal Tip,
+    [property: JsonPropertyName("payments")] IReadOnlyList<PaymentRequest> Payments);
 
 public record PaymentRequest(
-    [property: JsonPropertyName("metodo_pago")] PaymentMethod Method,
-    [property: JsonPropertyName("monto")] decimal Amount,
-    [property: JsonPropertyName("referencia_autorizacion")] string? AuthorizationReference);
+    [property: JsonPropertyName("method")] PaymentMethod Method,
+    [property: JsonPropertyName("amount")] decimal Amount,
+    [property: JsonPropertyName("authorization_reference")] string? AuthorizationReference);
 
-public record ItemSnapshot(
-    [property: JsonPropertyName("nombre_platillo")] string DishName,
-    [property: JsonPropertyName("cantidad")] int Quantity,
-    [property: JsonPropertyName("precio_unitario")] decimal UnitPrice,
-    [property: JsonPropertyName("importe")] decimal Amount);
-
+// Field names as written in PMC-13: `estado` and `mensaje` stay in Spanish there.
 public record ChargeResponse(
     [property: JsonPropertyName("folio")] string Folio,
     [property: JsonPropertyName("total")] decimal Total,
     [property: JsonPropertyName("estado")] TransactionStatus Status,
-    [property: JsonPropertyName("cambio_entregado")] decimal ChangeGiven,
+    [property: JsonPropertyName("change_given")] decimal ChangeGiven,
     [property: JsonPropertyName("mensaje")] string Message);

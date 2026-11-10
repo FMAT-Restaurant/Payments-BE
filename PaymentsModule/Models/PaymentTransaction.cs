@@ -11,6 +11,9 @@ public class PaymentTransaction
     public Guid DinningSessionId { get; set; }
     public Guid CashShiftId { get; set; }
     public required string CashierId { get; set; }
+    /// <summary>Table name from the PMC-5 snapshot; null while Órdenes does not publish it.</summary>
+    public string? TableName { get; set; }
+
     public decimal Subtotal { get; set; }
     public decimal Taxes { get; set; }
     public decimal Tip { get; set; }
@@ -18,10 +21,20 @@ public class PaymentTransaction
     /// <summary>Subtotal + taxes + tip. Always equals the sum of <see cref="Payments"/>.</summary>
     public decimal Total { get; set; }
 
+    /// <summary>Cash handed back to the customer; persisted for detail and audit (PMC-6 / PMC-11).</summary>
+    public decimal ChangeGiven { get; set; }
+
     public TransactionStatus Status { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
     public List<TransactionItem> Items { get; set; } = [];
     public List<PaymentBreakdown> Payments { get; set; } = [];
+}
+
+/// <summary>Last folio number issued per UTC day, so the folio restarts at 000001 every day (PMC-6 AC3).</summary>
+public class FolioCounter
+{
+    public DateOnly Day { get; set; }
+    public int LastNumber { get; set; }
 }
 
 public class TransactionItem
