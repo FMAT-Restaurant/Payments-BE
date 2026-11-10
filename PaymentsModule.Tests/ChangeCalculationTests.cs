@@ -25,9 +25,7 @@ namespace PaymentsModule.Tests;
 // Every test uses its own dinning session and cashier, because test classes run in parallel on the same database.
 public class ChangeCalculationTests : IClassFixture<PaymentsApiFactory>, IAsyncLifetime
 {
-    private static readonly string ConnectionString =
-        Environment.GetEnvironmentVariable("ConnectionStrings__SqlServer")
-        ?? "Server=localhost,14330;Database=payments_tests;User Id=sa;Password=Payments_Dev_2026!;TrustServerCertificate=True";
+    private static readonly string ConnectionString = TestDatabase.ConnectionString();
 
     private readonly IDistributedCache _cache = new MemoryDistributedCache(Options.Create(new MemoryDistributedCacheOptions()));
     private readonly TimeoutOnBreakdownInsert _timeout = new();

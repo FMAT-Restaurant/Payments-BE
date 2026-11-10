@@ -39,12 +39,7 @@ public sealed class PaymentsApiFactory : WebApplicationFactory<Program>
 {
     // The catalog is always set explicitly: whatever shape the base connection string has (Database= or Initial
     // Catalog=, with or without a trailing ';'), EnsureDeletedAsync can only ever drop payments_tests_http.
-    private static readonly string ConnectionString = new SqlConnectionStringBuilder(
-        Environment.GetEnvironmentVariable("ConnectionStrings__SqlServer")
-        ?? "Server=localhost,14330;Database=payments_tests;User Id=sa;Password=Payments_Dev_2026!;TrustServerCertificate=True")
-    {
-        InitialCatalog = "payments_tests_http"
-    }.ConnectionString;
+    private static readonly string ConnectionString = TestDatabase.ConnectionString("payments_tests_http");
 
     private static readonly SemaphoreSlim MigrateOnce = new(1, 1);
     private static bool _migrated;

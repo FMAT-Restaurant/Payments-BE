@@ -19,9 +19,7 @@ namespace PaymentsModule.Tests;
 // Runs against a real SQL Server: `docker compose up -d sqlserver` locally, a service container in CI.
 public class ChargeServiceTests : IAsyncLifetime
 {
-    private static readonly string ConnectionString =
-        Environment.GetEnvironmentVariable("ConnectionStrings__SqlServer")
-        ?? "Server=localhost,14330;Database=payments_tests;User Id=sa;Password=Payments_Dev_2026!;TrustServerCertificate=True";
+    private static readonly string ConnectionString = TestDatabase.ConnectionString();
 
     private static readonly SemaphoreSlim MigrateOnce = new(1, 1);
     private static bool _migrated;

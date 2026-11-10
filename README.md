@@ -1,6 +1,21 @@
 # Payments-BE
 BE para el microservicio de cobros/pagos en C#/.NET
 
+## Local secrets
+
+Passwords are never committed. Create a `.env` in the repo root (git-ignored):
+
+```dotenv
+MSSQL_SA_PASSWORD=<your local SQL Server sa password>
+JWT_SECRET=<same HS256 secret as Auth-Backend and the API Gateway>
+```
+
+`dotnet run` and `dotnet test` read SQL Server from one user environment variable (tests always use their own `payments_tests*` databases):
+
+```powershell
+[Environment]::SetEnvironmentVariable("ConnectionStrings__SqlServer", "Server=localhost,14330;Database=payments;User Id=sa;Password=<your password>;TrustServerCertificate=True", "User")
+```
+
 ## Run with Docker
 
 ```powershell

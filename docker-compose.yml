@@ -8,7 +8,7 @@ services:
     container_name: payments-sqlserver
     environment:
       ACCEPT_EULA: "Y"
-      MSSQL_SA_PASSWORD: "Payments_Dev_2026!" # local development only
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:?Define MSSQL_SA_PASSWORD in .env (see README)}
     ports:
       - "14330:1433" # avoids clashing with a native SQL Server install
     volumes:
@@ -49,7 +49,7 @@ services:
       ASPNETCORE_ENVIRONMENT: Development # enables Swagger at /swagger
       ASPNETCORE_HTTP_PORTS: "8084" # the API Gateway routes to http://payments-backend:8084
       Database__MigrateOnStartup: "true"
-      ConnectionStrings__SqlServer: "Server=sqlserver,1433;Database=payments;User Id=sa;Password=Payments_Dev_2026!;TrustServerCertificate=True"
+      ConnectionStrings__SqlServer: "Server=sqlserver,1433;Database=payments;User Id=sa;Password=${MSSQL_SA_PASSWORD};TrustServerCertificate=True"
       ConnectionStrings__Redis: "redis:6379"
       ConnectionStrings__RabbitMq: "amqp://guest:guest@rabbitmq:5672"
       # Same HS256 secret and issuer as Auth-Backend and the API Gateway (JWT_SECRET in .env).
