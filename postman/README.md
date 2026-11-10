@@ -73,11 +73,11 @@ Copia el token generado y pégalo en Postman.
 
 1. Abre **Postman**.
 2. Haz clic en **Import** (esquina superior izquierda).
-3. Selecciona los dos archivos de esta carpeta:
+3. Selecciona los dos archivos de esta carpeta (si ya los habías importado antes, selecciona **Replace** para actualizar):
    - `postman/Payments-BE.postman_collection.json` (Colección)
    - `postman/Payments-BE.postman_environment.json` (Entorno)
 4. En el selector de entornos de Postman (arriba a la derecha), selecciona **Payments-BE (Local Dev)**.
-5. Edita el entorno y pega tu token en `token` y en `supervisorToken`.
+5. La autenticación ya viene configurada en la pestaña **Authorization** (`Bearer Token` usando `{{token}}` a nivel de colección y `{{supervisorToken}}` en la carpeta de supervisión y exportación), por lo que todas las peticiones heredan el token automáticamente (*Inherit auth from parent*). Si generas tokens nuevos, solo actualízalos en las variables del entorno.
 
 ---
 
