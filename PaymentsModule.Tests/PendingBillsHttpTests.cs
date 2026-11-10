@@ -25,7 +25,7 @@ public class PendingBillsHttpTests(PaymentsApiFactory api) : IClassFixture<Payme
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
-    // RBAC: Request with unauthorized role (e.g. Mesero) -> 403 Forbidden.
+    // RBAC: Request with unauthorized role (e.g. Mesero) -> 403 Forbidden with FORBIDDEN_ROLE code.
     [Fact]
     public async Task Request_with_unauthorized_role_returns_403()
     {
@@ -34,6 +34,9 @@ public class PendingBillsHttpTests(PaymentsApiFactory api) : IClassFixture<Payme
         var response = await client.GetAsync("/api/v1/payments/pendings");
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        var error = await response.Content.ReadFromJsonAsync<ErrorResponse>();
+        Assert.NotNull(error);
+        Assert.Equal("FORBIDDEN_ROLE", error.Code);
     }
 
     // Scenario 2: No hay cuentas pendientes de cobro -> 200 OK con arreglo vacío.
@@ -192,16 +195,23 @@ public class PendingBillsHttpTests(PaymentsApiFactory api) : IClassFixture<Payme
         await ClearPendingIndexAsync();
         var sessionOld = Guid.NewGuid();
         var sessionNew = Guid.NewGuid();
-        var timeOld = DateTimeOffset.Parse("2026-11-05T14:20:00Z");
-        var timeNew = DateTimeOffset.Parse("2026-11-05T14:35:00Z");
+        var timeOld = DateTimeOffset.UtcNow.AddMinutes(-20);
+        var timeNew = DateTimeOffset.UtcNow;
 
         await SeedPendingBillAsync(sessionOld, "#ORD-101", "Mesa 01", "Mozo 1", 100m, timeOld);
+        await using (var scope = api.Services.CreateAsyncScope())
+        {
+            var index = scope.ServiceProvider.GetRequiredService<IPendingSessionIndex>();
+            await index.AddAsync(sessionOld, timeOld);
+        }
+
+        var cutoff = DateTimeOffset.UtcNow.AddMinutes(-5);
         await SeedPendingBillAsync(sessionNew, "#ORD-102", "Mesa 02", "Mozo 2", 200m, timeNew);
 
         using var client = api.CreateAuthenticatedClient("cashier-test", "Cajero");
 
-        // Polling with since = 14:30:00Z
-        var response = await client.GetAsync("/api/v1/payments/pendings?since=2026-11-05T14:30:00Z");
+        // Polling with since = cutoff
+        var response = await client.GetAsync($"/api/v1/payments/pendings?since={Uri.EscapeDataString(cutoff.ToString("O"))}");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<List<PendingBillResponse>>();

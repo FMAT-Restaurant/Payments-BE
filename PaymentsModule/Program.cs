@@ -3,6 +3,7 @@ using System.Reflection;
 using System.Text.Json.Serialization;
 using FluentValidation;
 using MassTransit;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using OpenTelemetry;
@@ -35,6 +36,7 @@ ValidatorOptions.Global.DisplayNameResolver = (_, member, _) =>
 // JWT forwarded by the API Gateway. Authority/audience come from Authentication:Schemes:Bearer in configuration.
 builder.Services.AddAuthentication().AddJwtBearer();
 builder.Services.AddAuthorization();
+builder.Services.AddSingleton<IAuthorizationMiddlewareResultHandler, PaymentsModule.Infrastructure.CustomAuthorizationMiddlewareResultHandler>();
 
 builder.Services.AddStackExchangeRedisCache(options =>
     options.Configuration = builder.Configuration.GetConnectionString("Redis"));
@@ -117,7 +119,6 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
-app.UseHttpsRedirection();
 app.UseAuthentication();
 app.UseAuthorization();
 

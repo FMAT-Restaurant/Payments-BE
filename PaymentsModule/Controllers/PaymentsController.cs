@@ -8,7 +8,7 @@ using PaymentsModule.Services;
 namespace PaymentsModule.Controllers;
 
 [ApiController]
-[Authorize]
+[Authorize(Roles = "Administrador,Gerente,Cajero")]
 [Route("api/v1/payments")]
 public class PaymentsController(ChargeService charges, IValidator<ChargeRequest> validator) : ControllerBase
 {

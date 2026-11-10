@@ -8,9 +8,9 @@ namespace PaymentsModule.Models;
 /// </summary>
 public record PendingBillResponse(
     [property: JsonPropertyName("dinning_session_id")] Guid DinningSessionId,
-    [property: JsonPropertyName("order_folio")] string OrderFolio,
-    [property: JsonPropertyName("table_name")] string TableName,
-    [property: JsonPropertyName("waiter_name")] string WaiterName,
+    [property: JsonPropertyName("order_folio")] string? OrderFolio,
+    [property: JsonPropertyName("table_name")] string? TableName,
+    [property: JsonPropertyName("waiter_name")] string? WaiterName,
     [property: JsonPropertyName("timestamp")] DateTimeOffset Timestamp,
     [property: JsonPropertyName("items")] IReadOnlyList<PendingBillItemResponse> Items,
     [property: JsonPropertyName("subtotal")] decimal Subtotal,
@@ -19,17 +19,9 @@ public record PendingBillResponse(
 {
     public static PendingBillResponse FromEvent(DinningSessionReadyEvent e)
     {
-        var orderFolio = !string.IsNullOrWhiteSpace(e.OrderFolio)
-            ? e.OrderFolio
-            : $"#ORD-{e.DinningSessionId.ToString()[..4].ToUpperInvariant()}";
-
-        var tableName = !string.IsNullOrWhiteSpace(e.TableName)
-            ? e.TableName
-            : $"Mesa {e.TableId.ToString()[..2]}";
-
-        var waiterName = !string.IsNullOrWhiteSpace(e.WaiterName)
-            ? e.WaiterName
-            : "Mesero";
+        var orderFolio = !string.IsNullOrWhiteSpace(e.OrderFolio) ? e.OrderFolio : null;
+        var tableName = !string.IsNullOrWhiteSpace(e.TableName) ? e.TableName : null;
+        var waiterName = !string.IsNullOrWhiteSpace(e.WaiterName) ? e.WaiterName : null;
 
         return new PendingBillResponse(
             e.DinningSessionId,
