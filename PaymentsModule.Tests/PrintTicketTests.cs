@@ -15,9 +15,7 @@ namespace PaymentsModule.Tests;
 // Runs against a real SQL Server: `docker compose up -d sqlserver` locally, a service container in CI.
 public class PrintTicketTests : IAsyncLifetime
 {
-    private static readonly string ConnectionString =
-        Environment.GetEnvironmentVariable("ConnectionStrings__SqlServer")
-        ?? "Server=localhost,14330;Database=payments_tests;User Id=sa;Password=Payments_Dev_2026!;TrustServerCertificate=True";
+    private static readonly string ConnectionString = TestDatabase.ConnectionString();
 
     // Far from the values the folio sequence hands out to the charge tests.
     private static long _numbers = 8_000_000_000;
