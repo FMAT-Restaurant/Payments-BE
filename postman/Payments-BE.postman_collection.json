@@ -1,0 +1,915 @@
+{
+  "info": {
+    "_postman_id": "payments-be-collection-v1",
+    "name": "Payments-BE - Restaurant Payments Service",
+    "description": "Colección completa para pruebas funcionales y automatizadas del microservicio Payments-BE (.NET 10).\n\nLa autenticación está configurada directamente en la pestaña **Authorization** (Bearer Token) a nivel de colección y carpetas para que todas las peticiones hereden el token automáticamente.\n\nEl orden de las carpetas permite ejecutar la colección completa con **Run collection** de principio a fin sin dejar turnos huérfanos abiertos.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "[\"cashShiftId\", \"folio\", \"dinningSessionId\"].forEach(function (key) {",
+          "    if (pm.environment.has(key) && !pm.environment.get(key)) {",
+          "        pm.environment.unset(key);",
+          "    }",
+          "});"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:5150",
+      "type": "string"
+    },
+    {
+      "key": "token",
+      "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1bmlxdWVfbmFtZSI6ImNhamVyby0xIiwic3ViIjoiY2FqZXJvLTEiLCJqdGkiOiI2MzgzZDg3NCIsInJvbGUiOiJDYWplcm8iLCJhdWQiOlsiaHR0cDovL2xvY2FsaG9zdDo1MTUwIiwiaHR0cHM6Ly9sb2NhbGhvc3Q6NzE4MSJdLCJuYmYiOjE3OTQyODM5NzgsImV4cCI6MTgwMjIzMjc3OCwiaWF0IjoxNzk0MjgzOTc5LCJpc3MiOiJkb3RuZXQtdXNlci1qd3RzIn0.Sk6afXTTZG80ixPiHLJxk23-cyn9RTFSB2j8BQwWiiw",
+      "type": "string"
+    },
+    {
+      "key": "supervisorToken",
+      "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1bmlxdWVfbmFtZSI6InN1cGVydmlzb3ItMSIsInN1YiI6InN1cGVydmlzb3ItMSIsImp0aSI6IjFmZWM2NzUwIiwicm9sZSI6IkFkbWluaXN0cmFkb3IiLCJhdWQiOlsiaHR0cDovL2xvY2FsaG9zdDo1MTUwIiwiaHR0cHM6Ly9sb2NhbGhvc3Q6NzE4MSJdLCJuYmYiOjE3OTQyODQwMTMsImV4cCI6MTgwMjIzMjgxMywiaWF0IjoxNzk0Mjg0MDEzLCJpc3MiOiJkb3RuZXQtdXNlci1qd3RzIn0.PTRUEhMAYRdvnE6a1QBbS5lYg5cpe8RwQ0VRI8EhCLU",
+      "type": "string"
+    },
+    {
+      "key": "cashShiftId",
+      "value": "00000000-0000-0000-0000-000000000001",
+      "type": "string"
+    },
+    {
+      "key": "folio",
+      "value": "TX-20261110-000001",
+      "type": "string"
+    },
+    {
+      "key": "dinningSessionId",
+      "value": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "00. Health & Docs",
+      "auth": {
+        "type": "noauth"
+      },
+      "item": [
+        {
+          "name": "Health Check (/health)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/health",
+              "host": ["{{baseUrl}}"],
+              "path": ["health"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Status code is 200 OK\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test(\"Body is Healthy\", function () {",
+                  "    pm.expect(pm.response.text()).to.include(\"Healthy\");",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "OpenAPI Spec (/openapi/v1.json)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/openapi/v1.json",
+              "host": ["{{baseUrl}}"],
+              "path": ["openapi", "v1.json"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Status code is 200 OK\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test(\"OpenAPI document is valid JSON\", function () {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.openapi).to.exist;",
+                  "    pm.expect(json.paths).to.exist;",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "01. Cuentas Pendientes (Inbox / Redis)",
+      "item": [
+        {
+          "name": "1. Consultar Cuentas Pendientes (GET /pendings)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/payments/pendings",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "payments", "pendings"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Bandeja de pendientes obtenida (200 OK)\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    const list = pm.response.json();",
+                  "    pm.expect(list).to.be.an('array');",
+                  "    if (list.length > 0) {",
+                  "        pm.collectionVariables.set(\"dinningSessionId\", list[0].dinning_session_id);",
+                  "        console.log(\"Sesión pendiente guardada:\", list[0].dinning_session_id);",
+                  "    }",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "2. Consultar Cuenta Pendiente por ID (GET /pendings/:id)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/payments/pendings/{{dinningSessionId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "payments", "pendings", "{{dinningSessionId}}"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    pm.test(\"Cuenta pendiente rehidratada (200 OK)\", function () {",
+                  "        const json = pm.response.json();",
+                  "        pm.expect(json.dinning_session_id).to.eql(pm.variables.get(\"dinningSessionId\"));",
+                  "        pm.expect(json.items).to.be.an('array');",
+                  "    });",
+                  "} else if (pm.response.code === 404) {",
+                  "    pm.test(\"Sesión no encontrada o ya cobrada (404)\", function () {",
+                  "        pm.response.to.have.status(404);",
+                  "    });",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "02. Turnos de Caja - Apertura y Consulta (Cajero)",
+      "item": [
+        {
+          "name": "1. Abrir Turno (POST /cash-shifts/open)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"opening_float\": 500.00\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/payments/cash-shifts/open",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "payments", "cash-shifts", "open"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "    pm.test(\"Turno abierto exitosamente (201 Created)\", function () {",
+                  "        const json = pm.response.json();",
+                  "        pm.expect(json.cash_shift_id).to.be.a('string');",
+                  "        pm.expect(json.status).to.eql(\"ABIERTO\");",
+                  "        pm.expect(json.message).to.be.a('string');",
+                  "        pm.collectionVariables.set(\"cashShiftId\", json.cash_shift_id);",
+                  "        console.log(\"Turno guardado en variable:\", json.cash_shift_id);",
+                  "    });",
+                  "} else if (pm.response.code === 409) {",
+                  "    pm.test(\"Cajero ya cuenta con un turno abierto (409 Conflict)\", function () {",
+                  "        const json = pm.response.json();",
+                  "        pm.expect(json.code).to.eql(\"CASH_SHIFT_ALREADY_OPEN\");",
+                  "    });",
+                  "} else {",
+                  "    pm.test(\"Respuesta inesperada: \" + pm.response.code, function () {",
+                  "        pm.expect(pm.response.code).to.be.oneOf([201, 409]);",
+                  "    });",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "2. Consultar Mi Turno Activo (GET /cash-shifts/me)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/payments/cash-shifts/me",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "payments", "cash-shifts", "me"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    pm.test(\"Turno activo encontrado (200 OK)\", function () {",
+                  "        const json = pm.response.json();",
+                  "        pm.expect(json.cash_shift_id).to.be.a('string');",
+                  "        pm.expect(json.opened_at).to.be.a('string');",
+                  "        pm.expect(json.opening_float).to.be.a('number');",
+                  "        pm.collectionVariables.set(\"cashShiftId\", json.cash_shift_id);",
+                  "    });",
+                  "} else if (pm.response.code === 404) {",
+                  "    pm.test(\"No hay turno activo para este cajero (404 Not Found)\", function () {",
+                  "        const json = pm.response.json();",
+                  "        pm.expect(json.code).to.eql(\"CASH_SHIFT_NOT_OPEN\");",
+                  "    });",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "3. Arqueo en Tiempo Real (GET /cash-shifts/summary)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/payments/cash-shifts/summary",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "payments", "cash-shifts", "summary"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    pm.test(\"Resumen en tiempo real obtenido (200 OK)\", function () {",
+                  "        const json = pm.response.json();",
+                  "        pm.expect(json.cash_shift_id).to.be.a('string');",
+                  "        pm.expect(json.status).to.eql(\"ABIERTO\");",
+                  "        pm.expect(json.expected_cash).to.be.a('number');",
+                  "        pm.expect(json.card_total).to.be.a('number');",
+                  "        pm.expect(json.card_transaction_count).to.be.a('number');",
+                  "        pm.expect(json.retained_tips).to.be.a('number');",
+                  "    });",
+                  "} else if (pm.response.code === 404) {",
+                  "    pm.test(\"Sin turno abierto para arqueo (404)\", function () {",
+                  "        pm.expect(pm.response.json().code).to.eql(\"CASH_SHIFT_NOT_OPEN\");",
+                  "    });",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "03. Procesamiento de Cobros (Charges)",
+      "item": [
+        {
+          "name": "1. Error: Tarjeta sin Referencia de Autorización (422)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dinning_session_id\": \"{{dinningSessionId}}\",\n  \"tip\": 0,\n  \"payments\": [\n    {\n      \"method\": \"TARJETA_DEBITO\",\n      \"amount\": 100.00,\n      \"authorization_reference\": null\n    }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/payments/charge",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "payments", "charge"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 422) {",
+                  "    pm.test(\"Rechazado: autorización requerida (422)\", function () {",
+                  "        const json = pm.response.json();",
+                  "        pm.expect(json.code).to.eql(\"AUTHORIZATION_REFERENCE_REQUIRED\");",
+                  "        pm.expect(json.message).to.include(\"referencia de autorización es obligatoria\");",
+                  "    });",
+                  "} else if (pm.response.code === 404) {",
+                  "    pm.test(\"Cuenta no encontrada en Redis (404 BILL_NOT_FOUND)\", function () {",
+                  "        pm.expect(pm.response.json().code).to.eql(\"BILL_NOT_FOUND\");",
+                  "    });",
+                  "} else if (pm.response.code === 409) {",
+                  "    pm.test(\"Sesión ya pagada previamente (409 TRANSACTION_ALREADY_PAID)\", function () {",
+                  "        pm.expect(pm.response.json().code).to.eql(\"TRANSACTION_ALREADY_PAID\");",
+                  "    });",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "2. Error: Fondos Insuficientes con Deficit (422)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dinning_session_id\": \"{{dinningSessionId}}\",\n  \"tip\": 0,\n  \"payments\": [\n    {\n      \"method\": \"EFECTIVO\",\n      \"amount\": 1.00,\n      \"authorization_reference\": null\n    }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/payments/charge",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "payments", "charge"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 422) {",
+                  "    pm.test(\"Rechazado: monto no cubre el total (422 INSUFFICIENT_FUNDS)\", function () {",
+                  "        const json = pm.response.json();",
+                  "        if (json.code === \"INSUFFICIENT_FUNDS\") {",
+                  "            pm.expect(json.deficit).to.be.above(0);",
+                  "        }",
+                  "    });",
+                  "} else if (pm.response.code === 404) {",
+                  "    pm.test(\"Cuenta no encontrada en Redis (404 BILL_NOT_FOUND)\", function () {",
+                  "        pm.expect(pm.response.json().code).to.eql(\"BILL_NOT_FOUND\");",
+                  "    });",
+                  "} else if (pm.response.code === 409) {",
+                  "    pm.test(\"Sesión ya pagada previamente (409 TRANSACTION_ALREADY_PAID)\", function () {",
+                  "        pm.expect(pm.response.json().code).to.eql(\"TRANSACTION_ALREADY_PAID\");",
+                  "    });",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "3. Cobro Exitoso con Efectivo y Cambio (POST /charge)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dinning_session_id\": \"{{dinningSessionId}}\",\n  \"tip\": 15.00,\n  \"payments\": [\n    {\n      \"method\": \"EFECTIVO\",\n      \"amount\": 300.00,\n      \"authorization_reference\": null\n    }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/payments/charge",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "payments", "charge"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "    pm.test(\"Cobro completado (201 Created)\", function () {",
+                  "        const json = pm.response.json();",
+                  "        pm.expect(json.folio).to.be.a('string');",
+                  "        pm.expect(json.estado).to.eql(\"COMPLETADO\");",
+                  "        pm.expect(json.change_given).to.be.a('number');",
+                  "        pm.collectionVariables.set(\"folio\", json.folio);",
+                  "        console.log(\"Folio generado:\", json.folio);",
+                  "    });",
+                  "} else if (pm.response.code === 404) {",
+                  "    pm.test(\"Cuenta no encontrada en Redis (404 BILL_NOT_FOUND)\", function () {",
+                  "        pm.expect(pm.response.json().code).to.eql(\"BILL_NOT_FOUND\");",
+                  "    });",
+                  "} else if (pm.response.code === 403) {",
+                  "    pm.test(\"Caja cerrada: debe abrir caja antes de cobrar (403)\", function () {",
+                  "        pm.expect(pm.response.json().code).to.eql(\"CASH_SHIFT_NOT_OPEN\");",
+                  "    });",
+                  "} else if (pm.response.code === 409) {",
+                  "    pm.test(\"Sesión ya pagada previamente (409 Conflict)\", function () {",
+                  "        pm.expect(pm.response.json().code).to.eql(\"TRANSACTION_ALREADY_PAID\");",
+                  "    });",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "4. Cobro Mixto / Idempotencia (POST /charge)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dinning_session_id\": \"{{dinningSessionId}}\",\n  \"tip\": 25.00,\n  \"payments\": [\n    {\n      \"method\": \"TARJETA_CREDITO\",\n      \"amount\": 200.00,\n      \"authorization_reference\": \"AUTH-TC-987654\"\n    },\n    {\n      \"method\": \"EFECTIVO\",\n      \"amount\": 150.00,\n      \"authorization_reference\": null\n    }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/payments/charge",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "payments", "charge"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Estatus válido de cobro / idempotencia (201, 409, 404, 403 o 422)\", function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([201, 403, 404, 409, 422]);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "04. Consultas, Tickets e Historial",
+      "item": [
+        {
+          "name": "1. Historial de Ventas Paginado (GET /payments)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/payments?start_date=2026-11-01T00:00:00Z&end_date=2026-11-30T23:59:59Z&page_index=1&page_size=10",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "payments"],
+              "query": [
+                { "key": "start_date", "value": "2026-11-01T00:00:00Z" },
+                { "key": "end_date", "value": "2026-11-30T23:59:59Z" },
+                { "key": "page_index", "value": "1" },
+                { "key": "page_size", "value": "10" }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Historial de ventas obtenido (200 OK)\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.page_index).to.eql(1);",
+                  "    pm.expect(json.page_size).to.eql(10);",
+                  "    pm.expect(json.total_count).to.be.a('number');",
+                  "    pm.expect(json.data).to.be.an('array');",
+                  "    if (json.data.length > 0) {",
+                  "        pm.collectionVariables.set(\"folio\", json.data[0].folio);",
+                  "    }",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "2. Detalle de Transacción por Folio (GET /payments/:folio)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/payments/{{folio}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "payments", "{{folio}}"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    pm.test(\"Detalle de ticket obtenido (200 OK)\", function () {",
+                  "        const json = pm.response.json();",
+                  "        pm.expect(json.folio).to.eql(pm.variables.get(\"folio\"));",
+                  "        pm.expect(json.status).to.be.oneOf([\"COMPLETADO\", \"CANCELADO\"]);",
+                  "        pm.expect(json.items).to.be.an('array');",
+                  "        pm.expect(json.payment_breakdowns).to.be.an('array');",
+                  "    });",
+                  "} else if (pm.response.code === 404) {",
+                  "    pm.test(\"Folio no existe (404 TRANSACTION_NOT_FOUND)\", function () {",
+                  "        pm.expect(pm.response.json().code).to.eql(\"TRANSACTION_NOT_FOUND\");",
+                  "    });",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "3. Ticket para Impresión (GET /payments/:folio/ticket)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/payments/{{folio}}/ticket",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "payments", "{{folio}}", "ticket"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    pm.test(\"Ticket formateado para impresión (200 OK)\", function () {",
+                  "        const json = pm.response.json();",
+                  "        pm.expect(json.restaurant_name).to.be.a('string');",
+                  "        pm.expect(json.folio).to.eql(pm.variables.get(\"folio\"));",
+                  "        pm.expect(json.items).to.be.an('array');",
+                  "        pm.expect(json.payments).to.be.an('array');",
+                  "    });",
+                  "} else if (pm.response.code === 404) {",
+                  "    pm.test(\"Folio no encontrado para ticket (404 TRANSACTION_NOT_FOUND)\", function () {",
+                  "        pm.expect(pm.response.json().code).to.eql(\"TRANSACTION_NOT_FOUND\");",
+                  "    });",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "4. Exportar Ventas CSV (GET /payments/export)",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{supervisorToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/payments/export?start_date=2026-11-01T00:00:00Z&end_date=2026-11-10T00:00:00Z",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "payments", "export"],
+              "query": [
+                { "key": "start_date", "value": "2026-11-01T00:00:00Z" },
+                { "key": "end_date", "value": "2026-11-10T00:00:00Z" }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    pm.test(\"CSV descargado correctamente (200 OK)\", function () {",
+                  "        pm.expect(pm.response.headers.get(\"Content-Type\")).to.include(\"text/csv\");",
+                  "        pm.expect(pm.response.text()).to.include(\"Folio,Fecha,Subtotal\");",
+                  "    });",
+                  "} else if (pm.response.code === 403) {",
+                  "    pm.test(\"Rol no administrador rechazado (403)\", function () {",
+                  "        pm.expect(pm.response.json().code).to.eql(\"FORBIDDEN_ROLE\");",
+                  "    });",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "05. Supervisión y Cierre de Turnos",
+      "auth": {
+        "type": "bearer",
+        "bearer": [
+          {
+            "key": "token",
+            "value": "{{supervisorToken}}",
+            "type": "string"
+          }
+        ]
+      },
+      "item": [
+        {
+          "name": "1. Listar Turnos Abiertos (GET /cash-shifts/open)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/payments/cash-shifts/open",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "payments", "cash-shifts", "open"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    pm.test(\"Lista de turnos abierta obtenida (200 OK)\", function () {",
+                  "        const list = pm.response.json();",
+                  "        pm.expect(list).to.be.an('array');",
+                  "        if (list.length > 0) {",
+                  "            pm.collectionVariables.set(\"cashShiftId\", list[0].cash_shift_id);",
+                  "        }",
+                  "    });",
+                  "} else if (pm.response.code === 403) {",
+                  "    pm.test(\"Rol no autorizado para supervisión (403 FORBIDDEN_ROLE)\", function () {",
+                  "        pm.expect(pm.response.json().code).to.eql(\"FORBIDDEN_ROLE\");",
+                  "    });",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "2. Arqueo por ID de Turno (GET /cash-shifts/:id/summary)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/payments/cash-shifts/{{cashShiftId}}/summary",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "payments", "cash-shifts", "{{cashShiftId}}", "summary"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    pm.test(\"Arqueo supervisado obtenido (200 OK)\", function () {",
+                  "        const json = pm.response.json();",
+                  "        pm.expect(json.cash_shift_id).to.eql(pm.variables.get(\"cashShiftId\"));",
+                  "    });",
+                  "} else if (pm.response.code === 404) {",
+                  "    pm.test(\"Turno no existe (404 CASH_SHIFT_NOT_FOUND)\", function () {",
+                  "        pm.expect(pm.response.json().code).to.eql(\"CASH_SHIFT_NOT_FOUND\");",
+                  "    });",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "3. Cerrar Turno del Cajero (POST /cash-shifts/close)",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"declared_cash\": 500.00,\n  \"reason\": \"Cierre regular al finalizar jornada\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/payments/cash-shifts/close",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "payments", "cash-shifts", "close"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    pm.test(\"Turno cerrado exitosamente (200 OK)\", function () {",
+                  "        const json = pm.response.json();",
+                  "        pm.expect(json.cash_shift_id).to.be.a('string');",
+                  "        pm.expect(json.status).to.be.oneOf([\"CERRADO\", \"DESCUADRADO\"]);",
+                  "        pm.expect(json.difference).to.be.a('number');",
+                  "        pm.expect(json.message).to.be.a('string');",
+                  "    });",
+                  "} else if (pm.response.code === 422) {",
+                  "    pm.test(\"Error de negocio: no hay turno abierto (422 Unprocessable)\", function () {",
+                  "        pm.expect(pm.response.json().code).to.eql(\"CASH_SHIFT_NOT_OPEN\");",
+                  "    });",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "4. Abrir Nuevo Turno para Cierre Forzado (POST /cash-shifts/open)",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"opening_float\": 500.00\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/payments/cash-shifts/open",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "payments", "cash-shifts", "open"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "    pm.test(\"Nuevo turno abierto para probar cierre forzado (201 Created)\", function () {",
+                  "        const json = pm.response.json();",
+                  "        pm.expect(json.cash_shift_id).to.be.a('string');",
+                  "        pm.expect(json.status).to.eql(\"ABIERTO\");",
+                  "        pm.collectionVariables.set(\"cashShiftId\", json.cash_shift_id);",
+                  "        console.log(\"Nuevo turno para cierre forzado:\", json.cash_shift_id);",
+                  "    });",
+                  "} else if (pm.response.code === 409) {",
+                  "    pm.test(\"Ya existe un turno abierto (409 Conflict)\", function () {",
+                  "        pm.expect(pm.response.json().code).to.eql(\"CASH_SHIFT_ALREADY_OPEN\");",
+                  "    });",
+                  "} else {",
+                  "    pm.test(\"Respuesta inesperada: \" + pm.response.code, function () {",
+                  "        pm.expect(pm.response.code).to.be.oneOf([201, 409]);",
+                  "    });",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "5. Cierre Forzado de Turno (POST /cash-shifts/:id/force-close)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"declared_cash\": 500.00,\n  \"force_close_reason\": \"Cierre forzado: abandono de puesto por el cajero.\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/payments/cash-shifts/{{cashShiftId}}/force-close",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "payments", "cash-shifts", "{{cashShiftId}}", "force-close"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    pm.test(\"Turno cerrado forzosamente (200 OK)\", function () {",
+                  "        const json = pm.response.json();",
+                  "        pm.expect(json.status).to.be.oneOf([\"CERRADO\", \"DESCUADRADO\"]);",
+                  "        pm.expect(json.difference).to.be.a('number');",
+                  "    });",
+                  "} else if (pm.response.code === 409) {",
+                  "    pm.test(\"Turno ya estaba cerrado (409 Conflict)\", function () {",
+                  "        pm.expect(pm.response.json().code).to.eql(\"CASH_SHIFT_ALREADY_CLOSED\");",
+                  "    });",
+                  "} else if (pm.response.code === 403) {",
+                  "    pm.test(\"Rol no supervisor rechazado (403)\", function () {",
+                  "        pm.expect(pm.response.json().code).to.eql(\"FORBIDDEN_ROLE\");",
+                  "    });",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
