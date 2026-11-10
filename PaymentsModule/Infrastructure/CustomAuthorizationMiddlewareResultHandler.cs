@@ -19,7 +19,8 @@ public class CustomAuthorizationMiddlewareResultHandler : IAuthorizationMiddlewa
             context.Response.StatusCode = StatusCodes.Status403Forbidden;
             context.Response.ContentType = "application/json";
             await context.Response.WriteAsJsonAsync(
-                new ErrorResponse("FORBIDDEN_ROLE", "No tiene permisos para realizar esta acción."));
+                new ErrorResponse("FORBIDDEN_ROLE", "No tiene permisos para realizar esta acción."),
+                context.RequestAborted);
             return;
         }
 
