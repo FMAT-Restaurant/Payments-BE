@@ -12,13 +12,15 @@ public class PendingBillService(IDistributedCache cache, IPendingSessionIndex pe
     };
 
     /// <summary>
-    /// Saves (or overwrites) the session snapshot. Returns false if the event was already processed or is older than the saved snapshot.
+    /// Saves (or overwrites) the session snapshot. Returns false if the event was already processed,
+    /// is older than the saved snapshot, or belongs to an already cancelled or paid session (hallazgo 7).
     /// Updates the atomic sorted set index in Redis with the update timestamp to support high-performance polling and since filtering (PMC-27).
     /// </summary>
     public async Task<bool> SaveSnapshotAsync(DinningSessionReadyEvent message, CancellationToken ct = default)
     {
-        // Out-of-order guard: if the session was already cancelled, discard the late creation event (PMC-28).
-        if (await cache.GetAsync(CancelledKey(message.DinningSessionId), ct) is not null)
+        // Out-of-order guard: if the session was already cancelled or paid, discard late creation events (PMC-28 / hallazgo 7).
+        if (await cache.GetAsync(CancelledKey(message.DinningSessionId), ct) is not null
+            || await cache.GetAsync(ClosedKey(message.DinningSessionId), ct) is not null)
         {
             return false;
         }
@@ -41,8 +43,8 @@ public class PendingBillService(IDistributedCache cache, IPendingSessionIndex pe
         await cache.SetStringAsync(BillKey(message.DinningSessionId), JsonSerializer.Serialize(message), Ttl, ct);
         await cache.SetStringAsync(eventKey, "1", Ttl, ct);
 
-        // Scored by the event timestamp (PMC-27 AC3): since filtering checks sessions created or updated on or after since.
-        await pendingSessions.AddAsync(message.DinningSessionId, message.Timestamp);
+        // Scored by when Pagos saw the change, not by the event timestamp: a late delivery must still show up in PMC-27's ?since.
+        await pendingSessions.AddAsync(message.DinningSessionId, DateTimeOffset.UtcNow);
         return true;
     }
 
@@ -105,13 +107,24 @@ public class PendingBillService(IDistributedCache cache, IPendingSessionIndex pe
     /// </summary>
     public async Task<bool> CancelSessionAsync(Guid dinningSessionId, CancellationToken ct = default)
     {
-        // Store tombstone in Redis with 24h TTL
+        // Store tombstones in Redis with 24h TTL
         await cache.SetStringAsync(CancelledKey(dinningSessionId), "1", Ttl, ct);
+        await cache.SetStringAsync(ClosedKey(dinningSessionId), "1", Ttl, ct);
 
         var existing = await GetAsync(dinningSessionId, ct);
         await RemoveAsync(dinningSessionId, ct);
 
         return existing is not null;
+    }
+
+    /// <summary>
+    /// Marks a session as paid/closed with a tombstone (24h TTL) and purges the snapshot and active index,
+    /// preventing late DinningSessionReadyEvents from re-adding a ghost bill to the inbox (hallazgo 7).
+    /// </summary>
+    public async Task MarkPaidAsync(Guid dinningSessionId, CancellationToken ct = default)
+    {
+        await cache.SetStringAsync(ClosedKey(dinningSessionId), "1", Ttl, ct);
+        await RemoveAsync(dinningSessionId, ct);
     }
 
     /// <summary>Removes the session from the cache and from the active index when paid or cancelled (PMC-28 / AC4).</summary>
@@ -123,4 +136,5 @@ public class PendingBillService(IDistributedCache cache, IPendingSessionIndex pe
 
     private static string BillKey(Guid dinningSessionId) => $"payments:bill:{dinningSessionId}";
     private static string CancelledKey(Guid dinningSessionId) => $"payments:cancelled:{dinningSessionId}";
+    private static string ClosedKey(Guid dinningSessionId) => $"payments:closed:{dinningSessionId}";
 }

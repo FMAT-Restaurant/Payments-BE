@@ -128,7 +128,7 @@ public class ChargeService(
 
         try
         {
-            await bills.RemoveAsync(request.DinningSessionId, ct);
+            await bills.MarkPaidAsync(request.DinningSessionId, ct);
             await pendingSessions.RemoveAsync(request.DinningSessionId);
         }
         // The sale is committed: a Redis failure must not turn it into a 500. The idempotency check keeps a stale entry harmless.

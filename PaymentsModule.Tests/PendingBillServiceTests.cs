@@ -140,35 +140,102 @@ public class PendingBillServiceTests
     {
         var session1 = Guid.NewGuid();
         var session2 = Guid.NewGuid();
-        var time1 = DateTimeOffset.Parse("2026-11-05T14:20:00Z");
-        var time2 = DateTimeOffset.Parse("2026-11-05T14:35:00Z");
-        var cutoff = DateTimeOffset.Parse("2026-11-05T14:30:00Z");
 
         var bill1 = new DinningSessionReadyEvent(
-            Guid.NewGuid(), session1, Guid.NewGuid(), Guid.NewGuid(), time1,
+            Guid.NewGuid(), session1, Guid.NewGuid(), Guid.NewGuid(), DateTimeOffset.UtcNow.AddMinutes(-20),
             [new BillItem(Guid.NewGuid(), "Platillo 1", 1, 100m, 100m)],
             new BillTotals(86.21m, 13.79m, 100m), "Mesa 1", "#ORD-1", "Mozo");
 
         var bill2 = new DinningSessionReadyEvent(
-            Guid.NewGuid(), session2, Guid.NewGuid(), Guid.NewGuid(), time2,
+            Guid.NewGuid(), session2, Guid.NewGuid(), Guid.NewGuid(), DateTimeOffset.UtcNow,
             [new BillItem(Guid.NewGuid(), "Platillo 2", 1, 200m, 200m)],
             new BillTotals(172.41m, 27.59m, 200m), "Mesa 2", "#ORD-2", "Mozo");
 
         await _service.SaveSnapshotAsync(bill1);
+        // Backdate session1 in the index to simulate arrival before the cutoff
+        await _index.AddAsync(session1, DateTimeOffset.UtcNow.AddMinutes(-20));
+
+        var cutoff = DateTimeOffset.UtcNow.AddMinutes(-5);
+
         await _service.SaveSnapshotAsync(bill2);
 
-        // Filter with since = 14:30:00Z -> only bill2 from 14:35:00Z is returned
+        // Filter with since = cutoff -> only bill2 received after cutoff is returned
         var filtered = await _service.GetAllPendingAsync(cutoff);
         Assert.Single(filtered);
         Assert.Equal(session2, filtered[0].DinningSessionId);
 
         // Query with since beyond all bills -> empty list
-        var none = await _service.GetAllPendingAsync(time2.AddMinutes(5));
+        var none = await _service.GetAllPendingAsync(DateTimeOffset.UtcNow.AddMinutes(5));
         Assert.Empty(none);
 
         // Query without since -> returns both bills
         var all = await _service.GetAllPendingAsync();
         Assert.Equal(2, all.Count);
+    }
+
+    [Fact]
+    public async Task SaveSnapshotAsync_scores_session_by_received_time_not_event_timestamp()
+    {
+        var session = Guid.NewGuid();
+        var oldEventTime = DateTimeOffset.UtcNow.AddHours(-2);
+        var bill = new DinningSessionReadyEvent(
+            Guid.NewGuid(), session, Guid.NewGuid(), Guid.NewGuid(), oldEventTime,
+            [new BillItem(Guid.NewGuid(), "Platillo", 1, 100m, 100m)],
+            new BillTotals(86.21m, 13.79m, 100m), "Mesa 1", "#ORD-1", "Mozo");
+
+        var beforeSave = DateTimeOffset.UtcNow.AddSeconds(-1);
+        await _service.SaveSnapshotAsync(bill);
+
+        // A query with since right before save MUST return the session,
+        // even though the event timestamp was 2 hours ago (hallazgo 2).
+        var returned = await _service.GetAllPendingAsync(since: beforeSave);
+        Assert.Single(returned);
+        Assert.Equal(session, returned[0].DinningSessionId);
+    }
+
+    [Fact]
+    public void FromEvent_maps_empty_or_whitespace_display_fields_to_null()
+    {
+        var session = Guid.NewGuid();
+        var bill = new DinningSessionReadyEvent(
+            Guid.NewGuid(), session, Guid.NewGuid(), Guid.NewGuid(), DateTimeOffset.UtcNow,
+            [new BillItem(Guid.NewGuid(), "Platillo", 1, 100m, 100m)],
+            new BillTotals(86.21m, 13.79m, 100m),
+            TableName: "  ",
+            OrderFolio: null,
+            WaiterName: "");
+
+        var response = PendingBillResponse.FromEvent(bill);
+
+        Assert.Null(response.OrderFolio);
+        Assert.Null(response.TableName);
+        Assert.Null(response.WaiterName);
+    }
+
+    [Fact]
+    public async Task SaveSnapshotAsync_discards_late_event_if_session_already_paid()
+    {
+        var session = Guid.NewGuid();
+        var bill = CreateEvent(session, "#ORD-1", "Mesa 1", "Mozo", 100m);
+
+        // Initial snapshot arrives and is saved
+        Assert.True(await _service.SaveSnapshotAsync(bill));
+
+        // The session is paid and marked closed
+        await _service.MarkPaidAsync(session);
+
+        // A late event arrives for the paid session
+        var lateEvent = new DinningSessionReadyEvent(
+            Guid.NewGuid(), session, Guid.NewGuid(), Guid.NewGuid(), DateTimeOffset.UtcNow,
+            [new BillItem(Guid.NewGuid(), "Platillo", 1, 100m, 100m)],
+            new BillTotals(86.21m, 13.79m, 100m), "Mesa 1", "#ORD-1", "Mozo");
+
+        var saved = await _service.SaveSnapshotAsync(lateEvent);
+
+        Assert.False(saved);
+        Assert.Null(await _service.GetPendingBillAsync(session));
+        var remaining = await _service.GetAllPendingAsync();
+        Assert.DoesNotContain(remaining, b => b.DinningSessionId == session);
     }
 
     private static DinningSessionReadyEvent CreateEvent(Guid session, string orderFolio, string tableName, string waiterName, decimal total) =>

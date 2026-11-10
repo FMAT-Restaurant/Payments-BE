@@ -17,6 +17,7 @@ public class CashShiftsController(
     IValidator<ForceCloseCashShiftRequest> forceCloseValidator) : ControllerBase
 {
     [HttpGet("me")]
+    [Authorize(Roles = "Administrador,Gerente,Cajero")]
     [ProducesResponseType<ActiveCashShiftResponse>(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     [ProducesResponseType<ErrorResponse>(StatusCodes.Status403Forbidden)]
@@ -28,12 +29,6 @@ public class CashShiftsController(
         if (string.IsNullOrEmpty(cashierId))
         {
             return Unauthorized();
-        }
-
-        if (!User.IsInRole("Administrador") && !User.IsInRole("Gerente") && !User.IsInRole("Cajero"))
-        {
-            return StatusCode(StatusCodes.Status403Forbidden,
-                new ErrorResponse("FORBIDDEN_ROLE", "No tiene permisos para realizar esta acción."));
         }
 
         var result = await shifts.GetActiveAsync(cashierId, ct);
@@ -68,6 +63,7 @@ public class CashShiftsController(
     }
 
     [HttpGet("{cash_shift_id}/summary")]
+    [Authorize(Roles = "Administrador,Gerente")]
     [ProducesResponseType<CashShiftSummaryResponse>(StatusCodes.Status200OK)]
     [ProducesResponseType<ErrorResponse>(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
@@ -77,13 +73,6 @@ public class CashShiftsController(
         [FromRoute(Name = "cash_shift_id")] string cashShiftId,
         CancellationToken ct)
     {
-        // Only Administrador and Gerente roles can supervise cash shifts.
-        if (!User.IsInRole("Administrador") && !User.IsInRole("Gerente"))
-        {
-            return StatusCode(StatusCodes.Status403Forbidden,
-                new ErrorResponse("FORBIDDEN_ROLE", "No tiene permisos para realizar esta acción."));
-        }
-
         if (!Guid.TryParse(cashShiftId, out var shiftId) || shiftId == Guid.Empty)
         {
             return BadRequest(new ErrorResponse(ErrorResponse.ValidationErrorCode, "El id del turno de caja tiene un formato inválido."));
@@ -99,18 +88,12 @@ public class CashShiftsController(
     }
 
     [HttpGet("open")]
+    [Authorize(Roles = "Administrador,Gerente")]
     [ProducesResponseType<IReadOnlyList<OpenShiftListItemResponse>>(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     [ProducesResponseType<ErrorResponse>(StatusCodes.Status403Forbidden)]
     public async Task<IActionResult> GetOpenShifts(CancellationToken ct)
     {
-        // Only Administrador and Gerente roles can access the supervisor open shifts list (PMC-30).
-        if (!User.IsInRole("Administrador") && !User.IsInRole("Gerente"))
-        {
-            return StatusCode(StatusCodes.Status403Forbidden,
-                new ErrorResponse("FORBIDDEN_ROLE", "No tiene permisos para realizar esta acción."));
-        }
-
         var openShifts = await shifts.GetOpenShiftsAsync(ct);
         return Ok(openShifts);
     }
@@ -178,6 +161,7 @@ public class CashShiftsController(
     }
 
     [HttpPost("{cash_shift_id}/force-close")]
+    [Authorize(Roles = "Administrador,Gerente")]
     [ProducesResponseType<ForceCloseCashShiftResponse>(StatusCodes.Status200OK)]
     [ProducesResponseType<ErrorResponse>(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
@@ -189,13 +173,6 @@ public class CashShiftsController(
         ForceCloseCashShiftRequest request,
         CancellationToken ct)
     {
-        // Only Administrador and Gerente roles can force close shifts.
-        if (!User.IsInRole("Administrador") && !User.IsInRole("Gerente"))
-        {
-            return StatusCode(StatusCodes.Status403Forbidden,
-                new ErrorResponse("FORBIDDEN_ROLE", "No tiene permisos para realizar esta acción."));
-        }
-
         if (!Guid.TryParse(cashShiftId, out var shiftId) || shiftId == Guid.Empty)
         {
             return BadRequest(new ErrorResponse(ErrorResponse.ValidationErrorCode, "El id del turno de caja tiene un formato inválido."));

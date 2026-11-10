@@ -1060,7 +1060,8 @@ public class CashShiftServiceTests : IAsyncLifetime
     {
         await using var scope = _provider.CreateAsyncScope();
         var controller = CreateController(scope.ServiceProvider, adminId, role);
-        return ToObjectResult(await controller.ForceClose(cashShiftId, request, CancellationToken.None));
+        return CheckAuthorization(controller, typeof(CashShiftsController).GetMethod(nameof(CashShiftsController.ForceClose))!)
+            ?? ToObjectResult(await controller.ForceClose(cashShiftId, request, CancellationToken.None));
     }
 
     private async Task RecordSaleAsync(string cashierId, decimal billTotal, decimal tip, params PaymentRequest[] payments)
@@ -1115,21 +1116,46 @@ public class CashShiftServiceTests : IAsyncLifetime
     {
         await using var scope = _provider.CreateAsyncScope();
         var controller = CreateController(scope.ServiceProvider, cashierId, role);
-        return ToObjectResult(await controller.GetMyActiveShift(CancellationToken.None));
+        return CheckAuthorization(controller, typeof(CashShiftsController).GetMethod(nameof(CashShiftsController.GetMyActiveShift))!)
+            ?? ToObjectResult(await controller.GetMyActiveShift(CancellationToken.None));
     }
 
     private async Task<ObjectResult> ControllerGetOpenShiftsAsync(string? role = "Administrador", string? cashierId = "supervisor-user")
     {
         await using var scope = _provider.CreateAsyncScope();
         var controller = CreateController(scope.ServiceProvider, cashierId, role);
-        return ToObjectResult(await controller.GetOpenShifts(CancellationToken.None));
+        return CheckAuthorization(controller, typeof(CashShiftsController).GetMethod(nameof(CashShiftsController.GetOpenShifts))!)
+            ?? ToObjectResult(await controller.GetOpenShifts(CancellationToken.None));
     }
 
     private async Task<ObjectResult> ControllerGetSummaryByIdAsync(string cashShiftId, string? role = "Administrador", string? cashierId = "supervisor-user")
     {
         await using var scope = _provider.CreateAsyncScope();
         var controller = CreateController(scope.ServiceProvider, cashierId, role);
-        return ToObjectResult(await controller.GetSummaryById(cashShiftId, CancellationToken.None));
+        return CheckAuthorization(controller, typeof(CashShiftsController).GetMethod(nameof(CashShiftsController.GetSummaryById))!)
+            ?? ToObjectResult(await controller.GetSummaryById(cashShiftId, CancellationToken.None));
+    }
+
+    private static ObjectResult? CheckAuthorization(ControllerBase controller, System.Reflection.MethodInfo method)
+    {
+        var authAttr = method.GetCustomAttributes(typeof(Microsoft.AspNetCore.Authorization.AuthorizeAttribute), true)
+            .Cast<Microsoft.AspNetCore.Authorization.AuthorizeAttribute>().FirstOrDefault()
+            ?? controller.GetType().GetCustomAttributes(typeof(Microsoft.AspNetCore.Authorization.AuthorizeAttribute), true)
+            .Cast<Microsoft.AspNetCore.Authorization.AuthorizeAttribute>().FirstOrDefault();
+
+        if (authAttr?.Roles is { } rolesStr)
+        {
+            var allowedRoles = rolesStr.Split(',', StringSplitOptions.TrimEntries);
+            if (!allowedRoles.Any(r => controller.User.IsInRole(r)))
+            {
+                return new ObjectResult(new ErrorResponse("FORBIDDEN_ROLE", "No tiene permisos para realizar esta acción."))
+                {
+                    StatusCode = StatusCodes.Status403Forbidden
+                };
+            }
+        }
+
+        return null;
     }
 
     private async Task<ObjectResult> ControllerOpenAsync(OpenCashShiftRequest request, string? cashierId)
