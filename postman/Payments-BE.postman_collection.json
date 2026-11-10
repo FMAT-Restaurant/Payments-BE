@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "payments-be-collection-v1",
     "name": "Payments-BE - Restaurant Payments Service",
-    "description": "Colección completa para pruebas funcionales y automatizadas del microservicio Payments-BE (.NET 10).\n\nLa autenticación está configurada directamente en la pestaña **Authorization** (Bearer Token) a nivel de colección y carpetas para que todas las peticiones hereden el token automáticamente.\n\nIncluye scripts de prueba (Tests) que validan códigos HTTP, contratos snake_case, errores transversales ({code, message}) y guardan variables automáticamente (cashShiftId, folio, dinningSessionId).",
+    "description": "Colección completa para pruebas funcionales y automatizadas del microservicio Payments-BE (.NET 10).\n\nLa autenticación está configurada directamente en la pestaña **Authorization** (Bearer Token) a nivel de colección y carpetas para que todas las peticiones hereden el token automáticamente.\n\nEl orden de las carpetas permite ejecutar la colección completa con **Run collection** de principio a fin sin dejar turnos huérfanos abiertos.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "auth": {
@@ -15,6 +15,21 @@
       }
     ]
   },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "[\"cashShiftId\", \"folio\", \"dinningSessionId\"].forEach(function (key) {",
+          "    if (pm.environment.has(key) && !pm.environment.get(key)) {",
+          "        pm.environment.unset(key);",
+          "    }",
+          "});"
+        ]
+      }
+    }
+  ],
   "variable": [
     {
       "key": "baseUrl",
@@ -33,7 +48,7 @@
     },
     {
       "key": "cashShiftId",
-      "value": "",
+      "value": "00000000-0000-0000-0000-000000000001",
       "type": "string"
     },
     {
@@ -115,7 +130,76 @@
       ]
     },
     {
-      "name": "01. Turnos de Caja (Cajero)",
+      "name": "01. Cuentas Pendientes (Inbox / Redis)",
+      "item": [
+        {
+          "name": "1. Consultar Cuentas Pendientes (GET /pendings)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/payments/pendings",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "payments", "pendings"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Bandeja de pendientes obtenida (200 OK)\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    const list = pm.response.json();",
+                  "    pm.expect(list).to.be.an('array');",
+                  "    if (list.length > 0) {",
+                  "        pm.collectionVariables.set(\"dinningSessionId\", list[0].dinning_session_id);",
+                  "        console.log(\"Sesión pendiente guardada:\", list[0].dinning_session_id);",
+                  "    }",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "2. Consultar Cuenta Pendiente por ID (GET /pendings/:id)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/payments/pendings/{{dinningSessionId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "payments", "pendings", "{{dinningSessionId}}"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    pm.test(\"Cuenta pendiente rehidratada (200 OK)\", function () {",
+                  "        const json = pm.response.json();",
+                  "        pm.expect(json.dinning_session_id).to.eql(pm.variables.get(\"dinningSessionId\"));",
+                  "        pm.expect(json.items).to.be.an('array');",
+                  "    });",
+                  "} else if (pm.response.code === 404) {",
+                  "    pm.test(\"Sesión no encontrada o ya cobrada (404)\", function () {",
+                  "        pm.response.to.have.status(404);",
+                  "    });",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "02. Turnos de Caja - Apertura y Consulta (Cajero)",
       "item": [
         {
           "name": "1. Abrir Turno (POST /cash-shifts/open)",
@@ -232,178 +316,6 @@
                   "} else if (pm.response.code === 404) {",
                   "    pm.test(\"Sin turno abierto para arqueo (404)\", function () {",
                   "        pm.expect(pm.response.json().code).to.eql(\"CASH_SHIFT_NOT_OPEN\");",
-                  "    });",
-                  "}"
-                ],
-                "type": "text/javascript"
-              }
-            }
-          ]
-        },
-        {
-          "name": "4. Cerrar Turno (POST /cash-shifts/close)",
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"declared_cash\": 500.00,\n  \"reason\": \"Cierre regular al finalizar jornada\"\n}"
-            },
-            "url": {
-              "raw": "{{baseUrl}}/api/v1/payments/cash-shifts/close",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "payments", "cash-shifts", "close"]
-            }
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "exec": [
-                  "if (pm.response.code === 200) {",
-                  "    pm.test(\"Turno cerrado exitosamente (200 OK)\", function () {",
-                  "        const json = pm.response.json();",
-                  "        pm.expect(json.cash_shift_id).to.be.a('string');",
-                  "        pm.expect(json.status).to.be.oneOf([\"CERRADO\", \"DESCUADRADO\"]);",
-                  "        pm.expect(json.difference).to.be.a('number');",
-                  "        pm.expect(json.message).to.be.a('string');",
-                  "    });",
-                  "} else if (pm.response.code === 422) {",
-                  "    pm.test(\"Error de negocio: no hay turno abierto (422 Unprocessable)\", function () {",
-                  "        pm.expect(pm.response.json().code).to.eql(\"CASH_SHIFT_NOT_OPEN\");",
-                  "    });",
-                  "}"
-                ],
-                "type": "text/javascript"
-              }
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "name": "02. Supervisión de Turnos (Admin / Gerente)",
-      "auth": {
-        "type": "bearer",
-        "bearer": [
-          {
-            "key": "token",
-            "value": "{{supervisorToken}}",
-            "type": "string"
-          }
-        ]
-      },
-      "item": [
-        {
-          "name": "1. Listar Turnos Abiertos (GET /cash-shifts/open)",
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": {
-              "raw": "{{baseUrl}}/api/v1/payments/cash-shifts/open",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "payments", "cash-shifts", "open"]
-            }
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "exec": [
-                  "if (pm.response.code === 200) {",
-                  "    pm.test(\"Lista de turnos abierta obtenida (200 OK)\", function () {",
-                  "        const list = pm.response.json();",
-                  "        pm.expect(list).to.be.an('array');",
-                  "        if (list.length > 0) {",
-                  "            pm.collectionVariables.set(\"cashShiftId\", list[0].cash_shift_id);",
-                  "        }",
-                  "    });",
-                  "} else if (pm.response.code === 403) {",
-                  "    pm.test(\"Rol no autorizado para supervisión (403 FORBIDDEN_ROLE)\", function () {",
-                  "        pm.expect(pm.response.json().code).to.eql(\"FORBIDDEN_ROLE\");",
-                  "    });",
-                  "}"
-                ],
-                "type": "text/javascript"
-              }
-            }
-          ]
-        },
-        {
-          "name": "2. Arqueo por ID de Turno (GET /cash-shifts/:id/summary)",
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": {
-              "raw": "{{baseUrl}}/api/v1/payments/cash-shifts/{{cashShiftId}}/summary",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "payments", "cash-shifts", "{{cashShiftId}}", "summary"]
-            }
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "exec": [
-                  "if (pm.response.code === 200) {",
-                  "    pm.test(\"Arqueo supervisado obtenido (200 OK)\", function () {",
-                  "        const json = pm.response.json();",
-                  "        pm.expect(json.cash_shift_id).to.eql(pm.collectionVariables.get(\"cashShiftId\"));",
-                  "    });",
-                  "} else if (pm.response.code === 404) {",
-                  "    pm.test(\"Turno no existe (404 CASH_SHIFT_NOT_FOUND)\", function () {",
-                  "        pm.expect(pm.response.json().code).to.eql(\"CASH_SHIFT_NOT_FOUND\");",
-                  "    });",
-                  "}"
-                ],
-                "type": "text/javascript"
-              }
-            }
-          ]
-        },
-        {
-          "name": "3. Cierre Forzado de Turno (POST /cash-shifts/:id/force-close)",
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"declared_cash\": 500.00,\n  \"force_close_reason\": \"Cierre forzado: abandono de puesto por el cajero.\"\n}"
-            },
-            "url": {
-              "raw": "{{baseUrl}}/api/v1/payments/cash-shifts/{{cashShiftId}}/force-close",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "payments", "cash-shifts", "{{cashShiftId}}", "force-close"]
-            }
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "exec": [
-                  "if (pm.response.code === 200) {",
-                  "    pm.test(\"Turno cerrado forzosamente (200 OK)\", function () {",
-                  "        const json = pm.response.json();",
-                  "        pm.expect(json.status).to.be.oneOf([\"CERRADO\", \"DESCUADRADO\"]);",
-                  "        pm.expect(json.difference).to.be.a('number');",
-                  "    });",
-                  "} else if (pm.response.code === 409) {",
-                  "    pm.test(\"Turno ya estaba cerrado (409 Conflict)\", function () {",
-                  "        pm.expect(pm.response.json().code).to.eql(\"CASH_SHIFT_ALREADY_CLOSED\");",
-                  "    });",
-                  "} else if (pm.response.code === 403) {",
-                  "    pm.test(\"Rol no supervisor rechazado (403)\", function () {",
-                  "        pm.expect(pm.response.json().code).to.eql(\"FORBIDDEN_ROLE\");",
                   "    });",
                   "}"
                 ],
@@ -535,6 +447,10 @@
                   "        pm.expect(json.code).to.eql(\"AUTHORIZATION_REFERENCE_REQUIRED\");",
                   "        pm.expect(json.message).to.include(\"referencia de autorización es obligatoria\");",
                   "    });",
+                  "} else if (pm.response.code === 404) {",
+                  "    pm.test(\"Cuenta no encontrada en Redis (404 BILL_NOT_FOUND)\", function () {",
+                  "        pm.expect(pm.response.json().code).to.eql(\"BILL_NOT_FOUND\");",
+                  "    });",
                   "}"
                 ],
                 "type": "text/javascript"
@@ -573,6 +489,10 @@
                   "        if (json.code === \"INSUFFICIENT_FUNDS\") {",
                   "            pm.expect(json.deficit).to.be.above(0);",
                   "        }",
+                  "    });",
+                  "} else if (pm.response.code === 404) {",
+                  "    pm.test(\"Cuenta no encontrada en Redis (404 BILL_NOT_FOUND)\", function () {",
+                  "        pm.expect(pm.response.json().code).to.eql(\"BILL_NOT_FOUND\");",
                   "    });",
                   "}"
                 ],
@@ -644,7 +564,7 @@
                   "if (pm.response.code === 200) {",
                   "    pm.test(\"Detalle de ticket obtenido (200 OK)\", function () {",
                   "        const json = pm.response.json();",
-                  "        pm.expect(json.folio).to.eql(pm.collectionVariables.get(\"folio\"));",
+                  "        pm.expect(json.folio).to.eql(pm.variables.get(\"folio\"));",
                   "        pm.expect(json.status).to.be.oneOf([\"COMPLETADO\", \"CANCELADO\"]);",
                   "        pm.expect(json.items).to.be.an('array');",
                   "        pm.expect(json.payment_breakdowns).to.be.an('array');",
@@ -680,12 +600,12 @@
                   "    pm.test(\"Ticket formateado para impresión (200 OK)\", function () {",
                   "        const json = pm.response.json();",
                   "        pm.expect(json.restaurant_name).to.be.a('string');",
-                  "        pm.expect(json.folio).to.eql(pm.collectionVariables.get(\"folio\"));",
+                  "        pm.expect(json.folio).to.eql(pm.variables.get(\"folio\"));",
                   "        pm.expect(json.items).to.be.an('array');",
                   "        pm.expect(json.payments).to.be.an('array');",
                   "    });",
                   "} else if (pm.response.code === 404) {",
-                  "    pm.test(\"Folio no encontrado para ticket (404)\", function () {",
+                  "    pm.test(\"Folio no encontrado para ticket (404 TRANSACTION_NOT_FOUND)\", function () {",
                   "        pm.expect(pm.response.json().code).to.eql(\"TRANSACTION_NOT_FOUND\");",
                   "    });",
                   "}"
@@ -744,48 +664,27 @@
       ]
     },
     {
-      "name": "05. Cuentas Pendientes (Inbox / Redis)",
+      "name": "05. Supervisión y Cierre de Turnos",
+      "auth": {
+        "type": "bearer",
+        "bearer": [
+          {
+            "key": "token",
+            "value": "{{supervisorToken}}",
+            "type": "string"
+          }
+        ]
+      },
       "item": [
         {
-          "name": "1. Consultar Cuentas Pendientes (GET /pendings)",
+          "name": "1. Listar Turnos Abiertos (GET /cash-shifts/open)",
           "request": {
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/api/v1/payments/pendings",
+              "raw": "{{baseUrl}}/api/v1/payments/cash-shifts/open",
               "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "payments", "pendings"]
-            }
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "exec": [
-                  "pm.test(\"Bandeja de pendientes obtenida (200 OK)\", function () {",
-                  "    pm.response.to.have.status(200);",
-                  "    const list = pm.response.json();",
-                  "    pm.expect(list).to.be.an('array');",
-                  "    if (list.length > 0) {",
-                  "        pm.collectionVariables.set(\"dinningSessionId\", list[0].dinning_session_id);",
-                  "        console.log(\"Sesión pendiente guardada:\", list[0].dinning_session_id);",
-                  "    }",
-                  "});"
-                ],
-                "type": "text/javascript"
-              }
-            }
-          ]
-        },
-        {
-          "name": "2. Consultar Cuenta Pendiente por ID (GET /pendings/:id)",
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": {
-              "raw": "{{baseUrl}}/api/v1/payments/pendings/{{dinningSessionId}}",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "payments", "pendings", "{{dinningSessionId}}"]
+              "path": ["api", "v1", "payments", "cash-shifts", "open"]
             }
           },
           "event": [
@@ -794,14 +693,148 @@
               "script": {
                 "exec": [
                   "if (pm.response.code === 200) {",
-                  "    pm.test(\"Cuenta pendiente rehidratada (200 OK)\", function () {",
+                  "    pm.test(\"Lista de turnos abierta obtenida (200 OK)\", function () {",
+                  "        const list = pm.response.json();",
+                  "        pm.expect(list).to.be.an('array');",
+                  "        if (list.length > 0) {",
+                  "            pm.collectionVariables.set(\"cashShiftId\", list[0].cash_shift_id);",
+                  "        }",
+                  "    });",
+                  "} else if (pm.response.code === 403) {",
+                  "    pm.test(\"Rol no autorizado para supervisión (403 FORBIDDEN_ROLE)\", function () {",
+                  "        pm.expect(pm.response.json().code).to.eql(\"FORBIDDEN_ROLE\");",
+                  "    });",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "2. Arqueo por ID de Turno (GET /cash-shifts/:id/summary)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/payments/cash-shifts/{{cashShiftId}}/summary",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "payments", "cash-shifts", "{{cashShiftId}}", "summary"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    pm.test(\"Arqueo supervisado obtenido (200 OK)\", function () {",
                   "        const json = pm.response.json();",
-                  "        pm.expect(json.dinning_session_id).to.eql(pm.collectionVariables.get(\"dinningSessionId\"));",
-                  "        pm.expect(json.items).to.be.an('array');",
+                  "        pm.expect(json.cash_shift_id).to.eql(pm.variables.get(\"cashShiftId\"));",
                   "    });",
                   "} else if (pm.response.code === 404) {",
-                  "    pm.test(\"Sesión no encontrada o ya cobrada (404)\", function () {",
-                  "        pm.response.to.have.status(404);",
+                  "    pm.test(\"Turno no existe (404 CASH_SHIFT_NOT_FOUND)\", function () {",
+                  "        pm.expect(pm.response.json().code).to.eql(\"CASH_SHIFT_NOT_FOUND\");",
+                  "    });",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "3. Cerrar Turno del Cajero (POST /cash-shifts/close)",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"declared_cash\": 500.00,\n  \"reason\": \"Cierre regular al finalizar jornada\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/payments/cash-shifts/close",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "payments", "cash-shifts", "close"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    pm.test(\"Turno cerrado exitosamente (200 OK)\", function () {",
+                  "        const json = pm.response.json();",
+                  "        pm.expect(json.cash_shift_id).to.be.a('string');",
+                  "        pm.expect(json.status).to.be.oneOf([\"CERRADO\", \"DESCUADRADO\"]);",
+                  "        pm.expect(json.difference).to.be.a('number');",
+                  "        pm.expect(json.message).to.be.a('string');",
+                  "    });",
+                  "} else if (pm.response.code === 422) {",
+                  "    pm.test(\"Error de negocio: no hay turno abierto (422 Unprocessable)\", function () {",
+                  "        pm.expect(pm.response.json().code).to.eql(\"CASH_SHIFT_NOT_OPEN\");",
+                  "    });",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "4. Cierre Forzado de Turno (POST /cash-shifts/:id/force-close)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"declared_cash\": 500.00,\n  \"force_close_reason\": \"Cierre forzado: abandono de puesto por el cajero.\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/payments/cash-shifts/{{cashShiftId}}/force-close",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "payments", "cash-shifts", "{{cashShiftId}}", "force-close"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    pm.test(\"Turno cerrado forzosamente (200 OK)\", function () {",
+                  "        const json = pm.response.json();",
+                  "        pm.expect(json.status).to.be.oneOf([\"CERRADO\", \"DESCUADRADO\"]);",
+                  "        pm.expect(json.difference).to.be.a('number');",
+                  "    });",
+                  "} else if (pm.response.code === 409) {",
+                  "    pm.test(\"Turno ya estaba cerrado (409 Conflict)\", function () {",
+                  "        pm.expect(pm.response.json().code).to.eql(\"CASH_SHIFT_ALREADY_CLOSED\");",
+                  "    });",
+                  "} else if (pm.response.code === 403) {",
+                  "    pm.test(\"Rol no supervisor rechazado (403)\", function () {",
+                  "        pm.expect(pm.response.json().code).to.eql(\"FORBIDDEN_ROLE\");",
                   "    });",
                   "}"
                 ],
