@@ -47,14 +47,26 @@ services:
         condition: service_started
     environment:
       ASPNETCORE_ENVIRONMENT: Development # enables Swagger at /swagger
+      ASPNETCORE_HTTP_PORTS: "8084" # the API Gateway routes to http://payments-backend:8084
       Database__MigrateOnStartup: "true"
       ConnectionStrings__SqlServer: "Server=sqlserver,1433;Database=payments;User Id=sa;Password=Payments_Dev_2026!;TrustServerCertificate=True"
       ConnectionStrings__Redis: "redis:6379"
       ConnectionStrings__RabbitMq: "amqp://guest:guest@rabbitmq:5672"
-      # JWT issuer (API Gateway / Auth). Any Authentication__Schemes__Bearer__* key can be added the same way.
-      Authentication__Schemes__Bearer__Authority: ${JWT_AUTHORITY:-}
+      # Same HS256 secret and issuer as Auth-Backend and the API Gateway (JWT_SECRET in .env).
+      Authentication__Schemes__Bearer__Secret: ${JWT_SECRET:-}
+      Authentication__Schemes__Bearer__ValidIssuer: "urn:fmat:restaurant:auth"
     ports:
-      - "5150:8080"
+      - "5150:8084"
+    networks:
+      default:
+      restaurant-network:
+        aliases:
+          - payments-backend
+
+networks:
+  # Created by the API-Gateway compose; start the gateway first (or `docker network create restaurant-network`).
+  restaurant-network:
+    external: true
 
 volumes:
   sqlserver-data:

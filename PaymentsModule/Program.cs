@@ -1,11 +1,13 @@
 using System.Globalization;
 using System.Reflection;
+using System.Text;
 using System.Text.Json.Serialization;
 using FluentValidation;
 using MassTransit;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.IdentityModel.Tokens;
 using OpenTelemetry;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Trace;
@@ -34,7 +36,17 @@ ValidatorOptions.Global.DisplayNameResolver = (_, member, _) =>
     member?.GetCustomAttribute<JsonPropertyNameAttribute>()?.Name;
 
 // JWT forwarded by the API Gateway. Authority/audience come from Authentication:Schemes:Bearer in configuration.
-builder.Services.AddAuthentication().AddJwtBearer();
+builder.Services.AddAuthentication().AddJwtBearer(options =>
+{
+    // Auth and Kong sign HS256 with the literal shared JWT_SECRET (no base64) and issue no `aud`,
+    // per the API-Gateway contract.
+    var secret = builder.Configuration["Authentication:Schemes:Bearer:Secret"];
+    if (!string.IsNullOrEmpty(secret))
+    {
+        options.TokenValidationParameters.IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secret));
+        options.TokenValidationParameters.ValidateAudience = false;
+    }
+});
 builder.Services.AddAuthorization();
 builder.Services.AddSingleton<IAuthorizationMiddlewareResultHandler, PaymentsModule.Infrastructure.CustomAuthorizationMiddlewareResultHandler>();
 
