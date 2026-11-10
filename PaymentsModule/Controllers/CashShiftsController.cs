@@ -41,10 +41,8 @@ public class CashShiftsController(
     }
 
     [HttpGet("summary")]
-    [Authorize(Roles = "Administrador,Gerente,Cajero")]
     [ProducesResponseType<CashShiftSummaryResponse>(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
-    [ProducesResponseType<ErrorResponse>(StatusCodes.Status403Forbidden)]
     [ProducesResponseType<ErrorResponse>(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> GetSummary(CancellationToken ct)
     {
@@ -101,11 +99,9 @@ public class CashShiftsController(
     }
 
     [HttpPost("open")]
-    [Authorize(Roles = "Administrador,Gerente,Cajero")]
     [ProducesResponseType<OpenCashShiftResponse>(StatusCodes.Status201Created)]
     [ProducesResponseType<ErrorResponse>(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
-    [ProducesResponseType<ErrorResponse>(StatusCodes.Status403Forbidden)]
     [ProducesResponseType<ErrorResponse>(StatusCodes.Status409Conflict)]
     public async Task<IActionResult> Open(OpenCashShiftRequest request, CancellationToken ct)
     {
@@ -136,11 +132,9 @@ public class CashShiftsController(
     }
 
     [HttpPost("close")]
-    [Authorize(Roles = "Administrador,Gerente,Cajero")]
     [ProducesResponseType<CloseCashShiftResponse>(StatusCodes.Status200OK)]
     [ProducesResponseType<ErrorResponse>(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
-    [ProducesResponseType<ErrorResponse>(StatusCodes.Status403Forbidden)]
     [ProducesResponseType<ErrorResponse>(StatusCodes.Status422UnprocessableEntity)]
     public async Task<IActionResult> Close(CloseCashShiftRequest request, CancellationToken ct)
     {
