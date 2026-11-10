@@ -13,12 +13,12 @@
     },
     {
       "key": "token",
-      "value": "REPLACE_WITH_CASHIER_OR_VALID_JWT",
+      "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1bmlxdWVfbmFtZSI6ImNhamVyby0xIiwic3ViIjoiY2FqZXJvLTEiLCJqdGkiOiJkMDQ3MmI2ZSIsInJvbGUiOiJDYWplcm8iLCJhdWQiOlsiaHR0cDovL2xvY2FsaG9zdDo1MTUwIiwiaHR0cHM6Ly9sb2NhbGhvc3Q6NzE4MSJdLCJuYmYiOjE3OTQyODI0NTMsImV4cCI6MTgwMjIzMTI1MywiaWF0IjoxNzk0MjgyNDU0LCJpc3MiOiJkb3RuZXQtdXNlci1qd3RzIn0.9BglMNvrFSHIdSp02TwMsKc9s361PUTu2jy91ctXHkw",
       "type": "string"
     },
     {
       "key": "supervisorToken",
-      "value": "REPLACE_WITH_SUPERVISOR_JWT",
+      "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1bmlxdWVfbmFtZSI6InN1cGVydmlzb3ItMSIsInN1YiI6InN1cGVydmlzb3ItMSIsImp0aSI6IjFhYTJkMjQ2Iiwicm9sZSI6IkFkbWluaXN0cmFkb3IiLCJhdWQiOlsiaHR0cDovL2xvY2FsaG9zdDo1MTUwIiwiaHR0cHM6Ly9sb2NhbGhvc3Q6NzE4MSJdLCJuYmYiOjE3OTQyODI0NzYsImV4cCI6MTgwMjIzMTI3NiwiaWF0IjoxNzk0MjgyNDc2LCJpc3MiOiJkb3RuZXQtdXNlci1qd3RzIn0.FhneY3jk01kSMHjjT_VbmImHdytZ4lFINlU9-yufPG0",
       "type": "string"
     },
     {
