@@ -798,7 +798,65 @@
           ]
         },
         {
-          "name": "4. Cierre Forzado de Turno (POST /cash-shifts/:id/force-close)",
+          "name": "4. Abrir Nuevo Turno para Cierre Forzado (POST /cash-shifts/open)",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"opening_float\": 500.00\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/payments/cash-shifts/open",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "payments", "cash-shifts", "open"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "    pm.test(\"Nuevo turno abierto para probar cierre forzado (201 Created)\", function () {",
+                  "        const json = pm.response.json();",
+                  "        pm.expect(json.cash_shift_id).to.be.a('string');",
+                  "        pm.expect(json.status).to.eql(\"ABIERTO\");",
+                  "        pm.collectionVariables.set(\"cashShiftId\", json.cash_shift_id);",
+                  "        console.log(\"Nuevo turno para cierre forzado:\", json.cash_shift_id);",
+                  "    });",
+                  "} else if (pm.response.code === 409) {",
+                  "    pm.test(\"Ya existe un turno abierto (409 Conflict)\", function () {",
+                  "        pm.expect(pm.response.json().code).to.eql(\"CASH_SHIFT_ALREADY_OPEN\");",
+                  "    });",
+                  "} else {",
+                  "    pm.test(\"Respuesta inesperada: \" + pm.response.code, function () {",
+                  "        pm.expect(pm.response.code).to.be.oneOf([201, 409]);",
+                  "    });",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "5. Cierre Forzado de Turno (POST /cash-shifts/:id/force-close)",
           "request": {
             "method": "POST",
             "header": [
