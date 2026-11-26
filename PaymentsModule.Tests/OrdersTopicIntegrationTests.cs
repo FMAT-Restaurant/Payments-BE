@@ -1,39 +1,33 @@
+using System.Text;
 using System.Text.Json;
 using FluentValidation;
-using MassTransit;
-using MassTransit.Serialization;
-using MassTransit.Testing;
 using Microsoft.Extensions.DependencyInjection;
-using PaymentsModule.Consumers;
 using PaymentsModule.Models;
 using PaymentsModule.Services;
 
 namespace PaymentsModule.Tests;
 
-public class OrdersTopicIntegrationTests : IAsyncLifetime
+public class OrdersTopicIntegrationTests : IAsyncDisposable
 {
     private readonly ServiceProvider _provider = new ServiceCollection()
         .AddLogging()
+        .AddOptions()
         .AddDistributedMemoryCache()
         .AddSingleton<IPendingSessionIndex, InMemoryPendingSessionIndex>()
         .AddScoped<IValidator<OrdersBillRequestedEvent>, OrdersBillRequestedEventValidator>()
         .AddScoped<IValidator<OrdersOrderCancelledEvent>, OrdersOrderCancelledEventValidator>()
         .AddScoped<PendingBillService>()
-        .AddMassTransitTestHarness(x =>
-        {
-            x.AddConsumer<OrdersBillRequestedConsumer, OrdersBillRequestedConsumerDefinition>();
-            x.AddConsumer<OrdersOrderCancelledConsumer, OrdersOrderCancelledConsumerDefinition>();
-        })
+        .AddSingleton<OrdersMessageHandler>()
         .BuildServiceProvider(true);
 
-    private ITestHarness Harness => _provider.GetRequiredService<ITestHarness>();
+    private OrdersMessageHandler Handler => _provider.GetRequiredService<OrdersMessageHandler>();
 
-    public Task InitializeAsync() => Harness.Start();
+    public ValueTask DisposeAsync() => _provider.DisposeAsync();
 
-    public async Task DisposeAsync() => await _provider.DisposeAsync();
-
-    [Fact]
-    public async Task Consumes_orders_bill_requested_raw_json_and_persists_pending_bill()
+    [Theory]
+    [InlineData("ordenes.cuenta.solicitada")]
+    [InlineData("ordenes.cobro.solicitado")]
+    public async Task Handles_orders_bill_requested_raw_json_and_persists_pending_bill(string routingKey)
     {
         // Exact wire payload documented in OBS-02 section 4.1 (ordenes.cuenta.solicitada / ordenes.cobro.solicitado).
         const string rawJson = """
@@ -61,10 +55,8 @@ public class OrdersTopicIntegrationTests : IAsyncLifetime
             }
             """;
 
-        var message = JsonSerializer.Deserialize<OrdersBillRequestedEvent>(rawJson)!;
-        var fault = await PublishBillAsync(message);
-
-        Assert.Null(fault);
+        var outcome = await Handler.HandleAsync(routingKey, Encoding.UTF8.GetBytes(rawJson));
+        Assert.Equal(OrdersMessageOutcome.Ack, outcome);
 
         var sessionId = Guid.Parse("22222222-3333-4444-8555-666666666666");
         var orderId = Guid.Parse("33333333-3333-3333-3333-333333333333");
@@ -106,8 +98,8 @@ public class OrdersTopicIntegrationTests : IAsyncLifetime
             Timestamp: DateTimeOffset.UtcNow,
             IsTakeaway: true);
 
-        var fault = await PublishBillAsync(message);
-        Assert.Null(fault);
+        var outcome = await Handler.HandleAsync("ordenes.cuenta.solicitada", JsonSerializer.SerializeToUtf8Bytes(message));
+        Assert.Equal(OrdersMessageOutcome.Ack, outcome);
 
         var saved = await GetBillAsync(orderId);
         Assert.NotNull(saved);
@@ -152,7 +144,7 @@ public class OrdersTopicIntegrationTests : IAsyncLifetime
             Items: [new OrdersBillItem(Guid.NewGuid().ToString(), "P-1", "Agua", 2, 60m, 120m)],
             Timestamp: DateTimeOffset.UtcNow);
 
-        Assert.Null(await PublishBillAsync(bill));
+        Assert.Equal(OrdersMessageOutcome.Ack, await Handler.HandleAsync("ordenes.cuenta.solicitada", JsonSerializer.SerializeToUtf8Bytes(bill)));
         Assert.NotNull(await GetBillAsync(sessionId));
 
         var cancel = new OrdersOrderCancelledEvent(
@@ -162,17 +154,21 @@ public class OrdersTopicIntegrationTests : IAsyncLifetime
             Reason: "Cancelada por cliente",
             Timestamp: DateTimeOffset.UtcNow);
 
-        Assert.Null(await PublishCancelAsync(cancel));
+        Assert.Equal(OrdersMessageOutcome.Ack, await Handler.HandleAsync("ordenes.orden.cancelada", JsonSerializer.SerializeToUtf8Bytes(cancel)));
         Assert.Null(await GetBillAsync(sessionId));
 
         // Late bill request for the cancelled session must be discarded by tombstone.
-        Assert.Null(await PublishBillAsync(bill with { EventId = Guid.NewGuid() }));
+        var lateBill = bill with { EventId = Guid.NewGuid() };
+        Assert.Equal(OrdersMessageOutcome.Ack, await Handler.HandleAsync("ordenes.cuenta.solicitada", JsonSerializer.SerializeToUtf8Bytes(lateBill)));
         Assert.Null(await GetBillAsync(sessionId));
     }
 
     [Fact]
-    public async Task Rejects_invalid_bill_requested_event_with_validation_exception()
+    public async Task Rejects_malformed_json_and_invalid_bill_without_persisting()
     {
+        var malformed = await Handler.HandleAsync("ordenes.cuenta.solicitada", "{bad json"u8.ToArray());
+        Assert.Equal(OrdersMessageOutcome.Reject, malformed);
+
         var invalid = new OrdersBillRequestedEvent(
             EventId: Guid.NewGuid(),
             OrderId: Guid.NewGuid(),
@@ -184,8 +180,8 @@ public class OrdersTopicIntegrationTests : IAsyncLifetime
             Items: [],
             Timestamp: DateTimeOffset.UtcNow);
 
-        var fault = await PublishBillAsync(invalid);
-        Assert.IsType<ValidationException>(fault);
+        var outcome = await Handler.HandleAsync("ordenes.cuenta.solicitada", JsonSerializer.SerializeToUtf8Bytes(invalid));
+        Assert.Equal(OrdersMessageOutcome.Reject, outcome);
     }
 
     [Fact]
@@ -214,14 +210,9 @@ public class OrdersTopicIntegrationTests : IAsyncLifetime
         };
 
         var payload = OrdersPaymentCompletedEvent.FromCharge(bill, cardTx);
-        var serializer = OrdersPaymentCompletedEvent.RawJsonSerializer;
-        var sendContext = new MassTransit.Context.MessageSendContext<OrdersPaymentCompletedEvent>(payload);
-        var body = serializer.GetMessageBody(sendContext);
-        var json = body.GetString();
+        var bytes = payload.ToUtf8JsonBytes();
 
-        Assert.Equal("application/json", serializer.ContentType.MediaType);
-
-        using var doc = JsonDocument.Parse(json);
+        using var doc = JsonDocument.Parse(bytes);
         var root = doc.RootElement;
         Assert.Equal(orderId, root.GetProperty("orderId").GetGuid());
         Assert.Equal(sessionId, root.GetProperty("sessionId").GetGuid());
@@ -236,42 +227,6 @@ public class OrdersTopicIntegrationTests : IAsyncLifetime
             new PaymentBreakdown { Method = PaymentMethod.Cash, Amount = 100m },
             new PaymentBreakdown { Method = PaymentMethod.DebitCard, Amount = 150m }
         ]));
-    }
-
-    private async Task<Exception?> PublishBillAsync(OrdersBillRequestedEvent message)
-    {
-        var consumed = Harness.GetConsumerHarness<OrdersBillRequestedConsumer>().Consumed;
-        IReceivedMessage<OrdersBillRequestedEvent>[] Received() =>
-            consumed.Select<OrdersBillRequestedEvent>(m => m.Context.Message.EventId == message.EventId).ToArray();
-
-        var before = Received().Length;
-        await Harness.Bus.Publish(message);
-
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        while (Received().Length == before)
-        {
-            await Task.Delay(20, timeout.Token);
-        }
-
-        return Received().Last().Exception;
-    }
-
-    private async Task<Exception?> PublishCancelAsync(OrdersOrderCancelledEvent message)
-    {
-        var consumed = Harness.GetConsumerHarness<OrdersOrderCancelledConsumer>().Consumed;
-        IReceivedMessage<OrdersOrderCancelledEvent>[] Received() =>
-            consumed.Select<OrdersOrderCancelledEvent>(m => m.Context.Message.EffectiveSessionId == message.EffectiveSessionId).ToArray();
-
-        var before = Received().Length;
-        await Harness.Bus.Publish(message);
-
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        while (Received().Length == before)
-        {
-            await Task.Delay(20, timeout.Token);
-        }
-
-        return Received().Last().Exception;
     }
 
     private async Task<DinningSessionReadyEvent?> GetBillAsync(Guid session)

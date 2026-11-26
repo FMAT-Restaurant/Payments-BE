@@ -3,7 +3,6 @@ using System.Reflection;
 using System.Text;
 using System.Text.Json.Serialization;
 using FluentValidation;
-using MassTransit;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -11,7 +10,6 @@ using Microsoft.IdentityModel.Tokens;
 using OpenTelemetry;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Trace;
-using PaymentsModule.Consumers;
 using PaymentsModule.Data;
 using PaymentsModule.Models;
 using PaymentsModule.Services;
@@ -59,7 +57,11 @@ builder.Services.AddScoped<IValidator<OrdersBillRequestedEvent>, OrdersBillReque
 builder.Services.AddScoped<IValidator<OrdersOrderCancelledEvent>, OrdersOrderCancelledEventValidator>();
 // Created on first use, so test hosts that replace the index never open a Redis connection.
 builder.Services.AddSingleton<IConnectionMultiplexer>(_ =>
-    ConnectionMultiplexer.Connect(builder.Configuration.GetConnectionString("Redis")!));
+{
+    var redisOptions = ConfigurationOptions.Parse(builder.Configuration.GetConnectionString("Redis")!);
+    redisOptions.AbortOnConnectFail = false;
+    return ConnectionMultiplexer.Connect(redisOptions);
+});
 builder.Services.AddSingleton<IPendingSessionIndex, RedisPendingSessionIndex>();
 builder.Services.AddScoped<PendingBillService>();
 builder.Services.AddScoped<IValidator<ChargeRequest>, ChargeRequestValidator>();
@@ -79,68 +81,11 @@ builder.Services.AddScoped<SalesExportService>();
 builder.Services.AddDbContext<PaymentsDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("SqlServer")));
 
-var ordersTopic = builder.Configuration.GetSection(OrdersTopicOptions.SectionName).Get<OrdersTopicOptions>()
-    ?? new OrdersTopicOptions();
-
-builder.Services.AddMassTransit(x =>
-{
-    x.AddConsumer<DinningSessionReadyConsumer, DinningSessionReadyConsumerDefinition>();
-    x.AddConsumer<DinningSessionCancelledConsumer, DinningSessionCancelledConsumerDefinition>();
-    x.AddConsumer<OrdersBillRequestedConsumer, OrdersBillRequestedConsumerDefinition>()
-        .ExcludeFromConfigureEndpoints();
-    x.AddConsumer<OrdersOrderCancelledConsumer, OrdersOrderCancelledConsumerDefinition>()
-        .ExcludeFromConfigureEndpoints();
-    // Bus outbox: events published from services are stored with the DbContext and only sent after COMMIT.
-    x.AddEntityFrameworkOutbox<PaymentsDbContext>(o =>
-    {
-        o.UseSqlServer();
-        o.UseBusOutbox();
-    });
-    x.UsingRabbitMq((context, cfg) =>
-    {
-        cfg.Host(new Uri(builder.Configuration.GetConnectionString("RabbitMq")!));
-
-        // Publish pagos.pago.completado in raw JSON to orders-backend's topic exchange (OBS-02).
-        cfg.Message<OrdersPaymentCompletedEvent>(m => m.SetEntityName(ordersTopic.Exchange));
-        cfg.Publish<OrdersPaymentCompletedEvent>(p => p.ExchangeType = RabbitMQ.Client.ExchangeType.Topic);
-        cfg.Send<OrdersPaymentCompletedEvent>(s => s.UseRoutingKeyFormatter(_ => ordersTopic.PaymentCompletedRoutingKey));
-
-        // Dedicated queues bound to ordenes.topic (never competing with cola_orders_events).
-        cfg.ReceiveEndpoint(ordersTopic.BillRequestedQueue, e =>
-        {
-            e.ConfigureConsumeTopology = false;
-            e.UseRawJsonDeserializer(isDefault: true);
-            foreach (var routingKey in ordersTopic.BillRequestedRoutingKeys)
-            {
-                e.Bind(ordersTopic.Exchange, s =>
-                {
-                    s.ExchangeType = RabbitMQ.Client.ExchangeType.Topic;
-                    s.RoutingKey = routingKey;
-                });
-            }
-
-            e.ConfigureConsumer<OrdersBillRequestedConsumer>(context);
-        });
-
-        cfg.ReceiveEndpoint(ordersTopic.OrderCancelledQueue, e =>
-        {
-            e.ConfigureConsumeTopology = false;
-            e.UseRawJsonDeserializer(isDefault: true);
-            foreach (var routingKey in ordersTopic.OrderCancelledRoutingKeys)
-            {
-                e.Bind(ordersTopic.Exchange, s =>
-                {
-                    s.ExchangeType = RabbitMQ.Client.ExchangeType.Topic;
-                    s.RoutingKey = routingKey;
-                });
-            }
-
-            e.ConfigureConsumer<OrdersOrderCancelledConsumer>(context);
-        });
-
-        cfg.ConfigureEndpoints(context);
-    });
-});
+// Direct RabbitMQ.Client messaging over ordenes.topic (one queue, zero extra exchanges).
+builder.Services.AddSingleton<RabbitMqConnectionManager>();
+builder.Services.AddSingleton<OrdersMessageHandler>();
+builder.Services.AddSingleton<IOrdersEventPublisher, RabbitMqOrdersEventPublisher>();
+builder.Services.AddHostedService<RabbitMqOrdersConsumerService>();
 
 // Observability (from main's ServiceDefaults). Exports only when OTEL_EXPORTER_OTLP_ENDPOINT is set.
 builder.Logging.AddOpenTelemetry(logging =>

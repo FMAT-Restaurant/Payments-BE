@@ -1,30 +1,25 @@
-using System.Net.Mime;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using FluentValidation;
-using MassTransit;
-using MassTransit.Serialization;
 
 namespace PaymentsModule.Models;
 
 /// <summary>
-/// Configuration for integrating with the shared RabbitMQ topic exchange (<c>ordenes.topic</c>)
-/// used by <c>orders-backend</c> (OBS-02 / TASK-45).
+/// Configuration for integrating directly with the shared RabbitMQ topic exchange (<c>ordenes.topic</c>)
+/// used by <c>orders-backend</c> via <c>RabbitMQ.Client</c> (OBS-02 / TASK-45).
 /// </summary>
 public sealed class OrdersTopicOptions
 {
     public const string SectionName = "Messaging:OrdersTopic";
     public const string DefaultExchange = "ordenes.topic";
-    public const string DefaultBillRequestedQueue = "cola_payments_bill_requested";
-    public const string DefaultOrderCancelledQueue = "cola_payments_order_cancelled";
+    public const string DefaultQueue = "cola_payments_events";
     public const string DefaultPaymentCompletedRoutingKey = "pagos.pago.completado";
 
     public string Exchange { get; set; } = DefaultExchange;
-    public string BillRequestedQueue { get; set; } = DefaultBillRequestedQueue;
+    public string Queue { get; set; } = DefaultQueue;
     public string[] BillRequestedRoutingKeys { get; set; } = ["ordenes.cuenta.solicitada", "ordenes.cobro.solicitado"];
-    public string OrderCancelledQueue { get; set; } = DefaultOrderCancelledQueue;
     public string[] OrderCancelledRoutingKeys { get; set; } = ["ordenes.orden.cancelada", "ordenes.order.cancelled"];
     public string PaymentCompletedRoutingKey { get; set; } = DefaultPaymentCompletedRoutingKey;
 }
@@ -188,7 +183,7 @@ public record OrdersPaymentCompletedEvent(
     [property: JsonPropertyName("paymentMethod")] string PaymentMethod,
     [property: JsonPropertyName("paidAt")] DateTimeOffset PaidAt)
 {
-    public static readonly IMessageSerializer RawJsonSerializer = new PlainJsonMessageSerializer();
+    public static readonly JsonSerializerOptions WireJsonOptions = new(JsonSerializerDefaults.Web);
 
     public static OrdersPaymentCompletedEvent FromCharge(
         DinningSessionReadyEvent bill,
@@ -214,17 +209,5 @@ public record OrdersPaymentCompletedEvent(
         };
     }
 
-    /// <summary>
-    /// Serializes outgoing topic events as plain UTF-8 JSON with standard JSON numbers
-    /// (MassTransit's built-in raw serializer inherits its decimal-as-string converter).
-    /// </summary>
-    private sealed class PlainJsonMessageSerializer : IMessageSerializer
-    {
-        private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
-
-        public ContentType ContentType { get; } = new("application/json");
-
-        public MessageBody GetMessageBody<T>(SendContext<T> context) where T : class =>
-            new BytesMessageBody(JsonSerializer.SerializeToUtf8Bytes(context.Message, JsonOptions));
-    }
+    public byte[] ToUtf8JsonBytes() => JsonSerializer.SerializeToUtf8Bytes(this, WireJsonOptions);
 }
