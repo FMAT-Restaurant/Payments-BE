@@ -52,8 +52,11 @@ builder.Services.AddSingleton<IAuthorizationMiddlewareResultHandler, PaymentsMod
 
 builder.Services.AddStackExchangeRedisCache(options =>
     options.Configuration = builder.Configuration.GetConnectionString("Redis"));
+builder.Services.Configure<OrdersTopicOptions>(builder.Configuration.GetSection(OrdersTopicOptions.SectionName));
 builder.Services.AddScoped<IValidator<DinningSessionReadyEvent>, DinningSessionReadyEventValidator>();
 builder.Services.AddScoped<IValidator<DinningSessionCancelledEvent>, DinningSessionCancelledEventValidator>();
+builder.Services.AddScoped<IValidator<OrdersBillRequestedEvent>, OrdersBillRequestedEventValidator>();
+builder.Services.AddScoped<IValidator<OrdersOrderCancelledEvent>, OrdersOrderCancelledEventValidator>();
 // Created on first use, so test hosts that replace the index never open a Redis connection.
 builder.Services.AddSingleton<IConnectionMultiplexer>(_ =>
     ConnectionMultiplexer.Connect(builder.Configuration.GetConnectionString("Redis")!));
@@ -76,10 +79,17 @@ builder.Services.AddScoped<SalesExportService>();
 builder.Services.AddDbContext<PaymentsDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("SqlServer")));
 
+var ordersTopic = builder.Configuration.GetSection(OrdersTopicOptions.SectionName).Get<OrdersTopicOptions>()
+    ?? new OrdersTopicOptions();
+
 builder.Services.AddMassTransit(x =>
 {
     x.AddConsumer<DinningSessionReadyConsumer, DinningSessionReadyConsumerDefinition>();
     x.AddConsumer<DinningSessionCancelledConsumer, DinningSessionCancelledConsumerDefinition>();
+    x.AddConsumer<OrdersBillRequestedConsumer, OrdersBillRequestedConsumerDefinition>()
+        .ExcludeFromConfigureEndpoints();
+    x.AddConsumer<OrdersOrderCancelledConsumer, OrdersOrderCancelledConsumerDefinition>()
+        .ExcludeFromConfigureEndpoints();
     // Bus outbox: events published from services are stored with the DbContext and only sent after COMMIT.
     x.AddEntityFrameworkOutbox<PaymentsDbContext>(o =>
     {
@@ -89,6 +99,45 @@ builder.Services.AddMassTransit(x =>
     x.UsingRabbitMq((context, cfg) =>
     {
         cfg.Host(new Uri(builder.Configuration.GetConnectionString("RabbitMq")!));
+
+        // Publish pagos.pago.completado in raw JSON to orders-backend's topic exchange (OBS-02).
+        cfg.Message<OrdersPaymentCompletedEvent>(m => m.SetEntityName(ordersTopic.Exchange));
+        cfg.Publish<OrdersPaymentCompletedEvent>(p => p.ExchangeType = RabbitMQ.Client.ExchangeType.Topic);
+        cfg.Send<OrdersPaymentCompletedEvent>(s => s.UseRoutingKeyFormatter(_ => ordersTopic.PaymentCompletedRoutingKey));
+
+        // Dedicated queues bound to ordenes.topic (never competing with cola_orders_events).
+        cfg.ReceiveEndpoint(ordersTopic.BillRequestedQueue, e =>
+        {
+            e.ConfigureConsumeTopology = false;
+            e.UseRawJsonDeserializer(isDefault: true);
+            foreach (var routingKey in ordersTopic.BillRequestedRoutingKeys)
+            {
+                e.Bind(ordersTopic.Exchange, s =>
+                {
+                    s.ExchangeType = RabbitMQ.Client.ExchangeType.Topic;
+                    s.RoutingKey = routingKey;
+                });
+            }
+
+            e.ConfigureConsumer<OrdersBillRequestedConsumer>(context);
+        });
+
+        cfg.ReceiveEndpoint(ordersTopic.OrderCancelledQueue, e =>
+        {
+            e.ConfigureConsumeTopology = false;
+            e.UseRawJsonDeserializer(isDefault: true);
+            foreach (var routingKey in ordersTopic.OrderCancelledRoutingKeys)
+            {
+                e.Bind(ordersTopic.Exchange, s =>
+                {
+                    s.ExchangeType = RabbitMQ.Client.ExchangeType.Topic;
+                    s.RoutingKey = routingKey;
+                });
+            }
+
+            e.ConfigureConsumer<OrdersOrderCancelledConsumer>(context);
+        });
+
         cfg.ConfigureEndpoints(context);
     });
 });

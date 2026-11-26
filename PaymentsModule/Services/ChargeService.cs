@@ -2,6 +2,7 @@ using System.Data;
 using MassTransit;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Data.SqlClient;
+using Microsoft.Extensions.Options;
 using PaymentsModule.Data;
 using PaymentsModule.Models;
 
@@ -27,7 +28,8 @@ public class ChargeService(
     IPendingSessionIndex pendingSessions,
     IPublishEndpoint publishEndpoint,
     IChargeCalculationService calculator,
-    ILogger<ChargeService> logger)
+    ILogger<ChargeService> logger,
+    IOptions<OrdersTopicOptions>? ordersTopicOptions = null)
 {
     /// <summary>Charges a pending bill. <paramref name="cashierId"/> must come from the caller's JWT, never from the payload.</summary>
     public async Task<ChargeResult> ChargeAsync(ChargeRequest request, string cashierId, CancellationToken ct = default)
@@ -112,6 +114,18 @@ public class ChargeService(
         // Stored in the outbox within this DB transaction; MassTransit delivers it only after COMMIT.
         await publishEndpoint.Publish(new PaymentCompletedEvent(
             Guid.NewGuid(), transaction.DinningSessionId, transaction.Folio, transaction.Total, transaction.CreatedAt), ct);
+
+        // Raw JSON event expected by orders-backend on ordenes.topic (pagos.pago.completado, OBS-02).
+        var paymentCompletedRoutingKey = ordersTopicOptions?.Value.PaymentCompletedRoutingKey
+            ?? OrdersTopicOptions.DefaultPaymentCompletedRoutingKey;
+        await publishEndpoint.Publish(
+            OrdersPaymentCompletedEvent.FromCharge(bill, transaction),
+            context =>
+            {
+                context.Serializer = OrdersPaymentCompletedEvent.RawJsonSerializer;
+                context.SetRoutingKey(paymentCompletedRoutingKey);
+            },
+            ct);
 
         try
         {
