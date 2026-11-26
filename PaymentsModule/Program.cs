@@ -82,7 +82,7 @@ builder.Services.AddDbContext<PaymentsDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("SqlServer")));
 
 // Direct RabbitMQ.Client messaging over ordenes.topic (one queue, zero extra exchanges).
-builder.Services.AddSingleton<RabbitMqConnectionManager>();
+builder.Services.AddSingleton<IRabbitMqConnectionManager, RabbitMqConnectionManager>();
 builder.Services.AddSingleton<OrdersMessageHandler>();
 builder.Services.AddSingleton<IOrdersEventPublisher, RabbitMqOrdersEventPublisher>();
 builder.Services.AddHostedService<RabbitMqOrdersConsumerService>();

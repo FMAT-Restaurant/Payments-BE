@@ -154,11 +154,28 @@ public record OrdersOrderCancelledEvent(
     [property: JsonPropertyName("timestamp")] DateTimeOffset? Timestamp = null)
 {
     [JsonIgnore]
-    public Guid EffectiveSessionId =>
-        SessionId is { } sid && sid != Guid.Empty ? sid
-        : DinningSessionId is { } dsid && dsid != Guid.Empty ? dsid
-        : OrderId is { } oid && oid != Guid.Empty ? oid
-        : Guid.Empty;
+    public Guid EffectiveSessionId
+    {
+        get
+        {
+            if (SessionId is { } sid && sid != Guid.Empty)
+            {
+                return sid;
+            }
+
+            if (DinningSessionId is { } dsid && dsid != Guid.Empty)
+            {
+                return dsid;
+            }
+
+            if (OrderId is { } oid && oid != Guid.Empty)
+            {
+                return oid;
+            }
+
+            return Guid.Empty;
+        }
+    }
 }
 
 public class OrdersOrderCancelledEventValidator : AbstractValidator<OrdersOrderCancelledEvent>

@@ -15,7 +15,7 @@ public enum OrdersMessageOutcome
 /// Routes and processes raw JSON messages received from <c>ordenes.topic</c> by AMQP routing key.
 /// Decoupled from the RabbitMQ transport so it can be unit-tested directly.
 /// </summary>
-public class OrdersMessageHandler(
+public partial class OrdersMessageHandler(
     IServiceScopeFactory scopeFactory,
     IOptions<OrdersTopicOptions> options,
     ILogger<OrdersMessageHandler> logger)
@@ -42,7 +42,7 @@ public class OrdersMessageHandler(
             return await HandleOrderCancelledAsync(routingKey, body, ct);
         }
 
-        logger.LogWarning("Ignoring message with unmapped routing key '{RoutingKey}'", routingKey);
+        LogUnmappedRoutingKey(logger, routingKey);
         return OrdersMessageOutcome.Ack;
     }
 
@@ -58,13 +58,13 @@ public class OrdersMessageHandler(
         }
         catch (JsonException ex)
         {
-            logger.LogWarning(ex, "Invalid JSON payload on '{RoutingKey}'; rejecting without requeue", routingKey);
+            LogInvalidJson(logger, ex, routingKey);
             return OrdersMessageOutcome.Reject;
         }
 
         if (message is null)
         {
-            logger.LogWarning("Null payload on '{RoutingKey}'; rejecting without requeue", routingKey);
+            LogNullPayload(logger, routingKey);
             return OrdersMessageOutcome.Reject;
         }
 
@@ -73,12 +73,12 @@ public class OrdersMessageHandler(
         var validation = await validator.ValidateAsync(message, ct);
         if (!validation.IsValid)
         {
-            logger.LogWarning(
-                "Validation failed for '{RoutingKey}' (event {EventId}, order {OrderId}): {Errors}",
-                routingKey,
-                message.EventId,
-                message.OrderId,
-                string.Join("; ", validation.Errors.Select(e => e.ErrorMessage)));
+            if (logger.IsEnabled(LogLevel.Warning))
+            {
+                var errors = string.Join("; ", validation.Errors.Select(e => e.ErrorMessage));
+                LogBillValidationFailed(logger, routingKey, message.EventId, message.OrderId, errors);
+            }
+
             return OrdersMessageOutcome.Reject;
         }
 
@@ -86,21 +86,11 @@ public class OrdersMessageHandler(
         var mapped = message.ToDinningSessionReadyEvent();
         if (!await bills.SaveSnapshotAsync(mapped, ct))
         {
-            logger.LogInformation(
-                "Orders event {EventId} for order {OrderId} (session {SessionId}) already processed, outdated, or closed; skipping",
-                message.EventId,
-                message.OrderId,
-                mapped.DinningSessionId);
+            LogBillSkipped(logger, message.EventId, message.OrderId, mapped.DinningSessionId);
         }
         else
         {
-            logger.LogInformation(
-                "Saved pending bill from '{RoutingKey}': order {OrderId}, session {SessionId}, status {Status}, total {Total}",
-                routingKey,
-                message.OrderId,
-                mapped.DinningSessionId,
-                message.Status,
-                message.TotalAmount);
+            LogBillSaved(logger, routingKey, message.OrderId, mapped.DinningSessionId, message.Status, message.TotalAmount);
         }
 
         return OrdersMessageOutcome.Ack;
@@ -118,13 +108,13 @@ public class OrdersMessageHandler(
         }
         catch (JsonException ex)
         {
-            logger.LogWarning(ex, "Invalid JSON payload on '{RoutingKey}'; rejecting without requeue", routingKey);
+            LogInvalidJson(logger, ex, routingKey);
             return OrdersMessageOutcome.Reject;
         }
 
         if (message is null)
         {
-            logger.LogWarning("Null payload on '{RoutingKey}'; rejecting without requeue", routingKey);
+            LogNullPayload(logger, routingKey);
             return OrdersMessageOutcome.Reject;
         }
 
@@ -133,10 +123,12 @@ public class OrdersMessageHandler(
         var validation = await validator.ValidateAsync(message, ct);
         if (!validation.IsValid)
         {
-            logger.LogWarning(
-                "Validation failed for cancellation on '{RoutingKey}': {Errors}",
-                routingKey,
-                string.Join("; ", validation.Errors.Select(e => e.ErrorMessage)));
+            if (logger.IsEnabled(LogLevel.Warning))
+            {
+                var errors = string.Join("; ", validation.Errors.Select(e => e.ErrorMessage));
+                LogCancellationValidationFailed(logger, routingKey, errors);
+            }
+
             return OrdersMessageOutcome.Reject;
         }
 
@@ -145,21 +137,40 @@ public class OrdersMessageHandler(
         var removed = await bills.CancelSessionAsync(sessionId, ct);
         if (!removed)
         {
-            logger.LogInformation(
-                "Orders cancellation on '{RoutingKey}' for session {SessionId} (order {OrderId}): not in cache, tombstone stored",
-                routingKey,
-                sessionId,
-                message.OrderId);
+            LogCancellationTombstoneOnly(logger, routingKey, sessionId, message.OrderId);
         }
         else
         {
-            logger.LogInformation(
-                "Orders cancellation on '{RoutingKey}' for session {SessionId} (order {OrderId}) removed from pending bills cache",
-                routingKey,
-                sessionId,
-                message.OrderId);
+            LogCancellationRemoved(logger, routingKey, sessionId, message.OrderId);
         }
 
         return OrdersMessageOutcome.Ack;
     }
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Ignoring message with unmapped routing key '{RoutingKey}'")]
+    private static partial void LogUnmappedRoutingKey(ILogger logger, string routingKey);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Invalid JSON payload on '{RoutingKey}'; rejecting without requeue")]
+    private static partial void LogInvalidJson(ILogger logger, Exception ex, string routingKey);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Null payload on '{RoutingKey}'; rejecting without requeue")]
+    private static partial void LogNullPayload(ILogger logger, string routingKey);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Validation failed for '{RoutingKey}' (event {EventId}, order {OrderId}): {Errors}")]
+    private static partial void LogBillValidationFailed(ILogger logger, string routingKey, Guid eventId, Guid orderId, string errors);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Orders event {EventId} for order {OrderId} (session {SessionId}) already processed, outdated, or closed; skipping")]
+    private static partial void LogBillSkipped(ILogger logger, Guid eventId, Guid orderId, Guid sessionId);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Saved pending bill from '{RoutingKey}': order {OrderId}, session {SessionId}, status {Status}, total {Total}")]
+    private static partial void LogBillSaved(ILogger logger, string routingKey, Guid orderId, Guid sessionId, string? status, decimal total);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Validation failed for cancellation on '{RoutingKey}': {Errors}")]
+    private static partial void LogCancellationValidationFailed(ILogger logger, string routingKey, string errors);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Orders cancellation on '{RoutingKey}' for session {SessionId} (order {OrderId}): not in cache, tombstone stored")]
+    private static partial void LogCancellationTombstoneOnly(ILogger logger, string routingKey, Guid sessionId, Guid? orderId);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Orders cancellation on '{RoutingKey}' for session {SessionId} (order {OrderId}) removed from pending bills cache")]
+    private static partial void LogCancellationRemoved(ILogger logger, string routingKey, Guid sessionId, Guid? orderId);
 }
