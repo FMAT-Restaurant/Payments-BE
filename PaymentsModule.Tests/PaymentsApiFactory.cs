@@ -105,7 +105,14 @@ public sealed class PaymentsApiFactory : WebApplicationFactory<Program>
             services.AddAuthentication(TestAuthHandler.SchemeName)
                 .AddScheme<AuthenticationSchemeOptions, TestAuthHandler>(TestAuthHandler.SchemeName, _ => { });
 
-            // Replaces the RabbitMQ bus configured in Program.cs with the in-memory one; consumers stay registered.
+            // Replaces RabbitMQ.Client hosted consumer/publisher so HTTP tests never need a RabbitMQ broker.
+            var consumerDescriptor = services.FirstOrDefault(d => d.ImplementationType == typeof(RabbitMqOrdersConsumerService));
+            if (consumerDescriptor is not null)
+            {
+                services.Remove(consumerDescriptor);
+            }
+            services.RemoveAll<IOrdersEventPublisher>();
+            services.AddSingleton<IOrdersEventPublisher, NoOpOrdersEventPublisher>();
             services.AddMassTransitTestHarness();
 
             services.RemoveAll<IDistributedCache>();

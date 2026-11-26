@@ -51,7 +51,7 @@ services:
       Database__MigrateOnStartup: "true"
       ConnectionStrings__SqlServer: "Server=sqlserver,1433;Database=payments;User Id=sa;Password=${MSSQL_SA_PASSWORD};TrustServerCertificate=True"
       ConnectionStrings__Redis: "redis:6379"
-      ConnectionStrings__RabbitMq: "amqp://guest:guest@rabbitmq:5672"
+      ConnectionStrings__RabbitMq: "${RABBITMQ_URL:-amqp://guest:guest@rabbitmq:5672}"
       # Same HS256 secret and issuer as Auth-Backend and the API Gateway (JWT_SECRET in .env).
       Authentication__Schemes__Bearer__Secret: ${JWT_SECRET:-}
       Authentication__Schemes__Bearer__ValidIssuer: "urn:fmat:restaurant:auth"

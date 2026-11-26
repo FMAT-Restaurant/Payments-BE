@@ -25,9 +25,10 @@ public class ChargeService(
     PaymentsDbContext db,
     PendingBillService bills,
     IPendingSessionIndex pendingSessions,
-    IPublishEndpoint publishEndpoint,
     IChargeCalculationService calculator,
-    ILogger<ChargeService> logger)
+    ILogger<ChargeService> logger,
+    IPublishEndpoint? publishEndpoint = null,
+    IOrdersEventPublisher? ordersEventPublisher = null)
 {
     /// <summary>Charges a pending bill. <paramref name="cashierId"/> must come from the caller's JWT, never from the payload.</summary>
     public async Task<ChargeResult> ChargeAsync(ChargeRequest request, string cashierId, CancellationToken ct = default)
@@ -109,9 +110,12 @@ public class ChargeService(
         transaction.Folio = $"TX-{day:yyyyMMdd}-{await NextDailyNumberAsync(db, day, ct):D6}";
         db.Transactions.Add(transaction);
 
-        // Stored in the outbox within this DB transaction; MassTransit delivers it only after COMMIT.
-        await publishEndpoint.Publish(new PaymentCompletedEvent(
-            Guid.NewGuid(), transaction.DinningSessionId, transaction.Folio, transaction.Total, transaction.CreatedAt), ct);
+        // Stored in the outbox within this DB transaction when MassTransit is registered (e.g. legacy test harness).
+        if (publishEndpoint is not null)
+        {
+            await publishEndpoint.Publish(new PaymentCompletedEvent(
+                Guid.NewGuid(), transaction.DinningSessionId, transaction.Folio, transaction.Total, transaction.CreatedAt), ct);
+        }
 
         try
         {
@@ -125,6 +129,19 @@ public class ChargeService(
         }
 
         await dbTransaction.CommitAsync(ct);
+
+        if (ordersEventPublisher is not null)
+        {
+            try
+            {
+                await ordersEventPublisher.PublishPaymentCompletedAsync(
+                    OrdersPaymentCompletedEvent.FromCharge(bill, transaction), ct);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                logger.LogError(ex, "Could not publish pagos.pago.completado for session {DinningSessionId}", request.DinningSessionId);
+            }
+        }
 
         try
         {

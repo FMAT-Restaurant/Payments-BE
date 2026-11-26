@@ -17,7 +17,10 @@ public record DinningSessionReadyEvent(
     // PMC-5 (08/11/2026): display data for the cash desk; null until Órdenes publishes them.
     string? TableName = null,
     string? WaiterName = null,
-    string? OrderFolio = null);
+    string? OrderFolio = null,
+    // OBS-02 (orders-backend integration): preserves orderId and takeaway flag for pagos.pago.completado.
+    Guid? OrderId = null,
+    bool IsTakeaway = false);
 
 public record BillItem(
     [property: JsonPropertyName("platilloId")] Guid DishId,

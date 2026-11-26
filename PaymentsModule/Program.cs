@@ -3,7 +3,6 @@ using System.Reflection;
 using System.Text;
 using System.Text.Json.Serialization;
 using FluentValidation;
-using MassTransit;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -11,7 +10,6 @@ using Microsoft.IdentityModel.Tokens;
 using OpenTelemetry;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Trace;
-using PaymentsModule.Consumers;
 using PaymentsModule.Data;
 using PaymentsModule.Models;
 using PaymentsModule.Services;
@@ -52,11 +50,18 @@ builder.Services.AddSingleton<IAuthorizationMiddlewareResultHandler, PaymentsMod
 
 builder.Services.AddStackExchangeRedisCache(options =>
     options.Configuration = builder.Configuration.GetConnectionString("Redis"));
+builder.Services.Configure<OrdersTopicOptions>(builder.Configuration.GetSection(OrdersTopicOptions.SectionName));
 builder.Services.AddScoped<IValidator<DinningSessionReadyEvent>, DinningSessionReadyEventValidator>();
 builder.Services.AddScoped<IValidator<DinningSessionCancelledEvent>, DinningSessionCancelledEventValidator>();
+builder.Services.AddScoped<IValidator<OrdersBillRequestedEvent>, OrdersBillRequestedEventValidator>();
+builder.Services.AddScoped<IValidator<OrdersOrderCancelledEvent>, OrdersOrderCancelledEventValidator>();
 // Created on first use, so test hosts that replace the index never open a Redis connection.
 builder.Services.AddSingleton<IConnectionMultiplexer>(_ =>
-    ConnectionMultiplexer.Connect(builder.Configuration.GetConnectionString("Redis")!));
+{
+    var redisOptions = ConfigurationOptions.Parse(builder.Configuration.GetConnectionString("Redis")!);
+    redisOptions.AbortOnConnectFail = false;
+    return ConnectionMultiplexer.Connect(redisOptions);
+});
 builder.Services.AddSingleton<IPendingSessionIndex, RedisPendingSessionIndex>();
 builder.Services.AddScoped<PendingBillService>();
 builder.Services.AddScoped<IValidator<ChargeRequest>, ChargeRequestValidator>();
@@ -76,22 +81,11 @@ builder.Services.AddScoped<SalesExportService>();
 builder.Services.AddDbContext<PaymentsDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("SqlServer")));
 
-builder.Services.AddMassTransit(x =>
-{
-    x.AddConsumer<DinningSessionReadyConsumer, DinningSessionReadyConsumerDefinition>();
-    x.AddConsumer<DinningSessionCancelledConsumer, DinningSessionCancelledConsumerDefinition>();
-    // Bus outbox: events published from services are stored with the DbContext and only sent after COMMIT.
-    x.AddEntityFrameworkOutbox<PaymentsDbContext>(o =>
-    {
-        o.UseSqlServer();
-        o.UseBusOutbox();
-    });
-    x.UsingRabbitMq((context, cfg) =>
-    {
-        cfg.Host(new Uri(builder.Configuration.GetConnectionString("RabbitMq")!));
-        cfg.ConfigureEndpoints(context);
-    });
-});
+// Direct RabbitMQ.Client messaging over ordenes.topic (one queue, zero extra exchanges).
+builder.Services.AddSingleton<IRabbitMqConnectionManager, RabbitMqConnectionManager>();
+builder.Services.AddSingleton<OrdersMessageHandler>();
+builder.Services.AddSingleton<IOrdersEventPublisher, RabbitMqOrdersEventPublisher>();
+builder.Services.AddHostedService<RabbitMqOrdersConsumerService>();
 
 // Observability (from main's ServiceDefaults). Exports only when OTEL_EXPORTER_OTLP_ENDPOINT is set.
 builder.Logging.AddOpenTelemetry(logging =>
